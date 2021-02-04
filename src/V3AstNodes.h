@@ -5502,9 +5502,9 @@ public:
                        : (m_urandom ? "%f$urandom()" : "%f$random()");
     }
     virtual string emitC() override {
-        return m_reset
-                   ? "VL_RAND_RESET_%nq(%nw, %P)"
-                   : seedp() ? "VL_RANDOM_SEEDED_%nq%lq(%nw, %P, %li)" : "VL_RANDOM_%nq(%nw, %P)";
+        return m_reset   ? "VL_RAND_RESET_%nq(%nw, %P)"
+               : seedp() ? "VL_RANDOM_SEEDED_%nq%lq(%nw, %P, %li)"
+                         : "VL_RANDOM_%nq(%nw, %P)";
     }
     virtual bool cleanOut() const override { return true; }
     virtual bool isGateOptimizable() const override { return false; }
@@ -9156,6 +9156,11 @@ public:
     const V3Graph* depGraphp() const { return m_depGraphp; }
     V3Graph* mutableDepGraphp() { return m_depGraphp; }
     void addMTaskBody(AstMTaskBody* bodyp) { addOp1p(bodyp); }
+
+    // Debugging
+    void dumpDotFile(const string& filename) const;
+    void dumpDotFilePrefixed(const string& nameComment) const;
+    void dumpDotFilePrefixedAlways(const string& nameComment) const;
 };
 
 class AstSplitPlaceholder final : public AstNode {
