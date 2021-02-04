@@ -9164,6 +9164,11 @@ public:
 
     const ExecGraphCritPath& critPath() const { return m_critPath; }
     void updateCritPath();
+
+    // Debugging
+    void dumpDotFile(const string& filename) const;
+    void dumpDotFilePrefixed(const string& nameComment) const;
+    void dumpDotFilePrefixedAlways(const string& nameComment) const;
 };
 
 class AstSplitPlaceholder final : public AstNode {

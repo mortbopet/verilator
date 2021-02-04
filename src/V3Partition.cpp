@@ -2569,6 +2569,8 @@ void V3Partition::finalize() {
     // With all mtasks scheduled, we now update the critical path
     // estimate of the AstExecGraph.
     execGraphp->updateCritPath();
+
+    execGraphp->dumpDotFilePrefixed("exec_final");
 }
 
 void V3Partition::selfTest() {
