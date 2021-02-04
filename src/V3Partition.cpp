@@ -2093,6 +2093,9 @@ public:
     }
 
     void go() {
+        // Order the graph to make fanouts available
+        m_mtasksp->orderPreRanked();
+
         // Build initial ready list
         for (V3GraphVertex* vxp = m_mtasksp->verticesBeginp(); vxp; vxp = vxp->verticesNextp()) {
             ExecMTask* mtaskp = dynamic_cast<ExecMTask*>(vxp);
@@ -2107,39 +2110,77 @@ public:
         while (!m_ready.empty()) {
             // For each task in the ready set, compute when it might start
             // on each thread (in that thread's local time frame.)
-            uint32_t bestTime = 0xffffffff;
-            uint32_t bestTh = 0;
+            uint32_t bestTime = UINT32_MAX;
+            uint32_t bestTh = UINT32_MAX;
             ExecMTask* bestMtaskp = nullptr;
-            for (uint32_t th = 0; th < m_nThreads; ++th) {
-                for (ReadyMTasks::iterator taskIt = m_ready.begin(); taskIt != m_ready.end();
-                     ++taskIt) {
+
+            // Logic:
+            // Always try to schedule a dependent mtask instead of an independent. If this is not
+            // ensured, then the locally optimal scheduling of an independent mtask may result in a
+            // worseing of the global scheduling, in the case that that now scheduled slot could
+            // have been better used for another ready node.
+            // If dependent:
+            //      Schedule on thread which finished creating it's first dependency (helps with
+            //      error bars)
+            // else:
+            //      schedule on a free thread
+
+            // Find dependent mtasks
+            std::vector<ExecMTask*> dependentMTasks;
+            std::copy_if(m_ready.begin(), m_ready.end(), std::back_inserter(dependentMTasks),
+                         [](const auto& mtaskp) { return !mtaskp->inEmpty(); });
+            if (dependentMTasks.size() != 0) {
+                // Select highest priority mtask
+                bestMtaskp = *std::max_element(dependentMTasks.begin(), dependentMTasks.end(),
+                                               [](const auto& lhsp, const auto& rhsp) {
+                                                   return lhsp->priority() < rhsp->priority();
+                                               });
+
+                // Schedule on thread which is the last to finish computation of a dependency to
+                // the selected mtask, and is available for execution. By doing so, we optimize for
+                // cache locality of the dependent variables, whilst minimizing the effects of
+                // imprecise task cost estimation.
+                uint32_t latestDepFinTime = 0;
+                for (V3GraphEdge* edgep = bestMtaskp->inBeginp(); edgep;
+                     edgep = edgep->inNextp()) {
+                    ExecMTask* priorp = dynamic_cast<ExecMTask*>(edgep->fromp());
+                    const uint32_t depEndTime = m_mtaskState[priorp].completionTime;
+                    const uint32_t threadAvailableTime = m_busyUntil[priorp->thread()];
+
+                    if (depEndTime > latestDepFinTime) {
+                        latestDepFinTime = depEndTime;
+                        if (depEndTime == threadAvailableTime && threadAvailableTime < bestTime) {
+                            // Thread is available directly after the dependency; schedule onto
+                            // this thread
+                            bestTime = threadAvailableTime;
+                            bestTh = priorp->thread();
+                        }
+                    }
+                }
+            } else {
+                // No dependent mtasks ready. Select the independent mtask with the largest
+                // out-degree.
+                bestMtaskp = *std::max_element(m_ready.begin(), m_ready.end(),
+                                               [](const auto& lhsp, const auto& rhsp) {
+                                                   return lhsp->fanout() < rhsp->fanout();
+                                               });
+            }
+
+            if (bestTime == UINT32_MAX) {
+                // Fallback scheduling is to schedule on earliest available thread
+                for (uint32_t th = 0; th < m_nThreads; th++) {
                     uint32_t timeBegin = m_busyUntil[th];
-                    if (timeBegin > bestTime) {
-                        UINFO(6, "th " << th << " busy until " << timeBegin
-                                       << ", later than bestTime " << bestTime
-                                       << ", skipping thread.\n");
-                        break;
-                    }
-                    ExecMTask* taskp = *taskIt;
-                    for (V3GraphEdge* edgep = taskp->inBeginp(); edgep; edgep = edgep->inNextp()) {
-                        ExecMTask* priorp = dynamic_cast<ExecMTask*>(edgep->fromp());
-                        uint32_t priorEndTime = completionTime(priorp, th);
-                        if (priorEndTime > timeBegin) timeBegin = priorEndTime;
-                    }
-                    UINFO(6, "Task " << taskp->name() << " start at " << timeBegin << " on thread "
-                                     << th << endl);
-                    if ((timeBegin < bestTime)
-                        || ((timeBegin == bestTime)
-                            && bestMtaskp  // Redundant, but appeases static analysis tools
-                            && (taskp->priority() > bestMtaskp->priority()))) {
+                    if (timeBegin < bestTime) {
                         bestTime = timeBegin;
                         bestTh = th;
-                        bestMtaskp = taskp;
                     }
                 }
             }
 
             if (!bestMtaskp) v3fatalSrc("Should have found some task");
+            if (bestTime == UINT32_MAX) { v3fatalSrc("Should have assigned best time to task"); };
+            if (bestTh == UINT32_MAX) v3fatalSrc("Should have assigned thread to task");
+
             UINFO(6, "Will schedule " << bestMtaskp->name() << " onto thread " << bestTh << endl);
             uint32_t bestEndTime = bestTime + bestMtaskp->cost();
             setCompletionTime(bestMtaskp, bestEndTime);
@@ -2570,7 +2611,7 @@ void V3Partition::finalize() {
     // estimate of the AstExecGraph.
     execGraphp->updateCritPath();
 
-    execGraphp->dumpDotFilePrefixed("exec_final");
+    execGraphp->dumpDotFilePrefixedAlways("exec_final");
 }
 
 void V3Partition::selfTest() {
