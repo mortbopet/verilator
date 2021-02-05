@@ -294,11 +294,12 @@ void AstExecGraph::dumpDotFile(const string& filename) const {
         }
     }
 
-    // Maintain the x-position of the right-hand side of each mtask node
+    // Maintain the x-position of the right-hand side of each mtask node. This simultaneously
+    // tracks which mtasks have been logged.
     std::map<const V3GraphVertex*, double> mtaskRhsEdge;
     // Maintain the x-position of the right hand side of each thread row
     std::map<uint32_t, double> threadRhsEdge;
-    std::set<const V3GraphVertex*> loggedTasks;
+
     std::function<void(const V3GraphVertex* vxp)> logTask = [&](const V3GraphVertex* vxp) {
         if (const ExecMTask* mtaskp = dynamic_cast<const ExecMTask*>(vxp)) {
             const double nodeWidth = minWidth * (static_cast<double>(mtaskp->cost()) / minCost);
@@ -321,13 +322,12 @@ void AstExecGraph::dumpDotFile(const string& filename) const {
 
             *logp << "\t" << vxp->name() << " [label=\"" + vxp->name() + "\""
                   << " width=" << nodeWidth << " pos=\"" << x << "," << y << "!\"]\n";
-            loggedTasks.insert(vxp);
         }
     };
 
     for (const V3GraphVertex* vxp = m_depGraphp->verticesBeginp(); vxp;
          vxp = vxp->verticesNextp()) {
-        if (loggedTasks.count(vxp) != 0) { continue; }
+        if (mtaskRhsEdge.count(vxp) != 0) { continue; }
         logTask(vxp);
     }
 
