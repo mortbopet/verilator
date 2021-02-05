@@ -292,43 +292,22 @@ void AstExecGraph::dumpDotFile(const string& filename) const {
         }
     }
 
-    // Maintain the x-position of the right-hand side of each mtask node. This simultaneously
-    // tracks which mtasks have been logged.
-    std::unordered_map<const V3GraphVertex*, double> mtaskRhsEdge;
-    // Maintain the x-position of the right hand side of each thread row
-    std::unordered_map<uint32_t, double> threadRhsEdge;
-
-    std::function<void(const V3GraphVertex* vxp)> logTask = [&](const V3GraphVertex* vxp) {
-        if (const ExecMTask* mtaskp = dynamic_cast<const ExecMTask*>(vxp)) {
-            const double nodeWidth = minWidth * (static_cast<double>(mtaskp->cost()) / minCost);
-            const int y = -mtaskp->thread();
-            double depRhsEdgeX = 0;
-            for (V3GraphEdge* edgep = mtaskp->inBeginp(); edgep; edgep = edgep->inNextp()) {
-                const V3GraphVertex* fromp = edgep->fromp();
-                if (mtaskRhsEdge.count(fromp) == 0) {
-                    logTask(fromp);  // Recurse
-                }
-
-                const auto it = mtaskRhsEdge.find(fromp);
-                UASSERT(it != mtaskRhsEdge.end(), "Dependent mtask should have been logged");
-                depRhsEdgeX = it->second > depRhsEdgeX ? it->second : depRhsEdgeX;
-            }
-            const double curThreadRHS = threadRhsEdge[mtaskp->thread()];
-            depRhsEdgeX = depRhsEdgeX > curThreadRHS ? depRhsEdgeX : curThreadRHS;
-            const double x = nodeWidth / 2.0 + depRhsEdgeX;
-            const double rhsX = x + nodeWidth / 2.0;
-            mtaskRhsEdge[vxp] = rhsX;
-            threadRhsEdge[mtaskp->thread()] = curThreadRHS > rhsX ? curThreadRHS : rhsX;
-
-            *logp << "  " << vxp->name() << " [label=\"" + vxp->name() + "\""
-                  << " width=" << nodeWidth << " pos=\"" << x << "," << y << "!\"]\n";
-        }
-    };
-
     for (const V3GraphVertex* vxp = m_depGraphp->verticesBeginp(); vxp;
          vxp = vxp->verticesNextp()) {
-        if (mtaskRhsEdge.count(vxp) != 0) { continue; }
-        logTask(vxp);
+        if (const ExecMTask* mtaskp = dynamic_cast<const ExecMTask*>(vxp)) {
+            const double nodeWidth = minWidth * (static_cast<double>(mtaskp->cost()) / minCost);
+            const double x
+                = (minWidth * (static_cast<double>((mtaskp->cost()) / 2.0) + mtaskp->startTime()))
+                  / minCost;
+            const int y = -mtaskp->thread();
+            const bool onCP
+                = std::find(m_critPath.begin(), m_critPath.end(), mtaskp) != m_critPath.end();
+
+            *logp << "  " << vxp->name() << " [label=\"" << vxp->name() << " ("
+                  << mtaskp->startTime() << ":" << mtaskp->endTime() << ")"
+                  << "\"" << (onCP ? " color=\"red\"" : "") << " width=" << nodeWidth << " pos=\""
+                  << x << "," << y << "!\"]\n";
+        }
     }
 
     // MTask dependency edges
@@ -337,8 +316,13 @@ void AstExecGraph::dumpDotFile(const string& filename) const {
          vxp = vxp->verticesNextp()) {
         if (const ExecMTask* mtaskp = dynamic_cast<const ExecMTask*>(vxp)) {
             for (V3GraphEdge* edgep = mtaskp->outBeginp(); edgep; edgep = edgep->outNextp()) {
+
                 const V3GraphVertex* top = edgep->top();
-                *logp << "  " << vxp->name() << " -> " << top->name() << "\n";
+                const bool onCP
+                    = (std::find(m_critPath.begin(), m_critPath.end(), vxp) != m_critPath.end())
+                      & (std::find(m_critPath.begin(), m_critPath.end(), top) != m_critPath.end());
+                *logp << "  " << vxp->name() << " -> " << top->name()
+                      << (onCP ? "[color=\"red\"]" : "") << "\n";
             }
         }
     }
