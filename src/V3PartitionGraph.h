@@ -59,6 +59,8 @@ private:
     uint32_t m_priority = 0;  // Predicted critical path from the start of
     // this mtask to the ends of the graph that are reachable from this
     // mtask. In abstract time units.
+    uint32_t m_downstreamCost = 0;  // Predicted sum of costs of all descendants
+    // of this mtask.
     uint32_t m_cost = 0;  // Predicted runtime of this mtask, in the same
     // abstract time units as priority().
     uint32_t m_startTime = 0;  // predicted start time of this mtask, in the same
@@ -80,6 +82,9 @@ public:
     virtual uint32_t id() const override { return m_id; }
     uint32_t priority() const { return m_priority; }
     void priority(uint32_t pri) { m_priority = pri; }
+    uint32_t downstreamCost() const { return m_downstreamCost; }
+    void downstreamCost(uint32_t cost) { m_downstreamCost = cost; }
+    uint32_t downstreamCostIncl() const { return m_downstreamCost + cost(); }
     virtual uint32_t cost() const override { return m_cost; }
     void cost(uint32_t cost) { m_cost = cost; }
     void thread(uint32_t thread) { m_thread = thread; }

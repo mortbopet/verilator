@@ -30,6 +30,7 @@
 #include <list>
 #include <memory>
 #include <unordered_set>
+#include <functional>
 
 class MergeCandidate;
 
@@ -2578,6 +2579,21 @@ void V3Partition::finalizeCosts(V3Graph* execMTaskGraphp) {
     {
         execMTaskGraphp->removeTransitiveEdges();
         V3Partition::debugMTaskGraphStats(execMTaskGraphp, "transitive2");
+    }
+
+    // Record downstream costs for each node
+    std::function<uint32_t(ExecMTask*)> downstreamCost = [&](ExecMTask* vxp) {
+        if (vxp->downstreamCost() != 0) return vxp->downstreamCost();
+        uint32_t cost = 0;
+        for (V3GraphEdge* edgep = vxp->outBeginp(); edgep; edgep = edgep->outNextp()) {
+            ExecMTask* followp = dynamic_cast<ExecMTask*>(edgep->top());
+            cost += downstreamCost(followp) + followp->cost();
+        }
+        vxp->downstreamCost(cost);
+        return cost;
+    };
+    for (V3GraphVertex* vxp = execMTaskGraphp->verticesBeginp(); vxp; vxp = vxp->verticesNextp()) {
+        downstreamCost(dynamic_cast<ExecMTask*>(vxp));
     }
 
     // Record summary stats for final m_tasks graph.
