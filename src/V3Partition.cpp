@@ -2158,13 +2158,24 @@ public:
                         }
                     }
                 }
-            } else {
+            }
+
+            if (bestMtaskp == nullptr) {
                 // No dependent mtasks ready. Select the independent mtask with the largest
                 // out-degree.
-                bestMtaskp = *std::max_element(m_ready.begin(), m_ready.end(),
-                                               [](const auto& lhsp, const auto& rhsp) {
-                                                   return lhsp->fanout() < rhsp->fanout();
-                                               });
+                uint32_t maxout = 0;
+                for (const auto& rp : m_ready) {
+                    maxout = maxout < rp->fanout() ? rp->fanout() : maxout;
+                }
+                std::vector<ExecMTask*> highfanout;
+                std::copy_if(m_ready.begin(), m_ready.end(), std::back_inserter(highfanout),
+                             [=](const auto& mtaskp) { return mtaskp->fanout() == maxout; });
+
+                // As tie breaker, select task with highest inclusive downstream cost.
+                bestMtaskp = *std::max_element(
+                    highfanout.begin(), highfanout.end(), [](const auto& lhsp, const auto& rhsp) {
+                        return lhsp->downstreamCostIncl() < rhsp->downstreamCostIncl();
+                    });
             }
 
             if (bestTime == UINT32_MAX) {
