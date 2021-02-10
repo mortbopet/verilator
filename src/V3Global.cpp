@@ -86,15 +86,15 @@ void V3Global::dumpCheckGlobalTree(const string& stagename, int newNumber, bool 
     if (v3Global.opt.stats()) V3Stats::statsStage(stagename);
 }
 
-const std::string& V3Global::ptrToId(const void* p) {
+const std::string& V3Global::ptrToId(const void* p, const bool withParens) {
     auto it = m_ptrToId.find(p);
     if (it == m_ptrToId.end()) {
         std::ostringstream os;
         if (p) {
-            os << "(";
+            if (withParens) os << "(";
             unsigned id = m_ptrToId.size();
             do { os << static_cast<char>('A' + id % 26); } while (id /= 26);
-            os << ")";
+            if (withParens) os << ")";
         } else {
             os << "0";
         }
