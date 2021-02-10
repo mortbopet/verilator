@@ -250,6 +250,7 @@ void AstExecGraph::updateCritPath() {
 
         critTaskp = nextCritTask;
     }
+}
 
 void AstExecGraph::dumpDotFilePrefixed(const string& nameComment) const {
     if (v3Global.opt.dumpTree()) dumpDotFilePrefixedAlways(nameComment);
@@ -1189,7 +1190,7 @@ void AstWhile::addNextStmt(AstNode* newp, AstNode* belowp) {
 // not actually be a unique identifier as the address can get reused after a
 // node has been freed.
 static std::string nodeAddr(const AstNode* nodep) {
-    return v3Global.opt.dumpTreeAddrids() ? v3Global.ptrToId(nodep) : cvtToHex(nodep);
+    return v3Global.opt.dumpTreeAddrids() ? v3Global.ptrToId(nodep, false) : cvtToHex(nodep);
 }
 
 void AstNode::dump(std::ostream& str) const {
