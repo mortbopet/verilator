@@ -2331,6 +2331,15 @@ void Verilated::profThreadsFilenamep(const char* flagp) VL_MT_SAFE {
     s_ns.s_profThreadsFilenamep = strdup(flagp);
 }
 
+void Verilated::dumpSigs(const std::map<std::string, std::map<unsigned, unsigned>>& sigs) {
+    FILE* fp = fopen("sigs.txt", "w");
+    for (const auto& sig : sigs) {
+        fprintf(fp, "%s\n", sig.first.c_str());
+        for (const auto& kv : sig.second) { fprintf(fp, "%d:%d\n", kv.first, kv.second); }
+        fprintf(fp, "\n");
+    }
+}
+
 const char* Verilated::catName(const char* n1, const char* n2, const char* delimiter) VL_MT_SAFE {
     // Returns new'ed data
     // Used by symbol table creation to make module names

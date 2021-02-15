@@ -86,6 +86,7 @@ public:
         EVL_FUNC_ALL
     } EisWhich;
     void emitVarList(AstNode* firstp, EisWhich which, const string& prefixIfImp, string& sectionr);
+    void emitVarProf(AstNode* firstp, EisWhich which);
     static void emitVarSort(const VarSortMap& vmap, VarVec* sortedp);
     void emitSortedVarList(const VarVec& anons, const VarVec& nonanons, const string& prefixIfImp);
     void emitVarCtors(bool* firstp);
@@ -1857,6 +1858,7 @@ class EmitCImp final : EmitCStmts {
     void emitSettleLoop(const std::string& eval_call, bool initial);
     void emitWrapEval(AstNodeModule* modp);
     void emitMTaskState();
+    void emitVarProfState();
     void emitMTaskVertexCtors(bool* firstp);
     void emitIntTop(AstNodeModule* modp);
     void emitInt(AstNodeModule* modp);
@@ -2792,6 +2794,8 @@ void EmitCImp::emitWrapEval(AstNodeModule* modp) {
         puts("}\n");
     }
 
+    if (v3Global.opt.profileSigs()) { emitVarProf(modp->stmtsp(), EVL_CLASS_SIG); }
+
     emitSettleLoop((string("VL_DEBUG_IF(VL_DBG_MSGF(\"+ Clock loop\\n\"););\n")
                     + (v3Global.opt.trace() ? "vlSymsp->__Vm_activity = true;\n" : "")
                     + protect("_eval") + "(vlSymsp);"),
@@ -2834,6 +2838,33 @@ void EmitCImp::emitWrapEval(AstNodeModule* modp) {
 
 //----------------------------------------------------------------------
 // Top interface/ implementation
+
+void EmitCStmts::emitVarProf(AstNode* firstp, EisWhich which) {
+    putsDecoration("// Variable profiling logging\n");
+    for (AstNode* nodep = firstp; nodep; nodep = nodep->nextp()) {
+        if (const AstVar* varp = VN_CAST(nodep, Var)) {
+            bool doit = true;
+            switch (which) {
+            case EVL_CLASS_IO: doit = varp->isIO(); break;
+            case EVL_CLASS_SIG:
+                doit = ((varp->isSignal() || varp->isClassMember()) && !varp->isIO());
+                break;
+            case EVL_CLASS_TEMP: doit = (varp->isTemp() && !varp->isIO()); break;
+            case EVL_CLASS_PAR: doit = (varp->isParam() && !VN_IS(varp->valuep(), Const)); break;
+            case EVL_CLASS_ALL: doit = true; break;
+            case EVL_FUNC_ALL: doit = true; break;
+            default: v3fatalSrc("Bad Case");
+            }
+            if (doit) {
+                // Do not track arrays
+                if (dynamic_cast<AstNodeArrayDType*>(varp->dtypep())) continue;
+
+                puts("__Vvar_prof[\"" + varp->nameProtect() + "\"][vlTOPp->" + varp->nameProtect()
+                     + "]++;\n");
+            }
+        }
+    }
+}
 
 void EmitCStmts::emitVarList(AstNode* firstp, EisWhich which, const string& prefixIfImp,
                              string& sectionr) {
@@ -3021,6 +3052,11 @@ void EmitCStmts::emitSortedVarList(const VarVec& anons, const VarVec& nonanons,
     }
 }
 
+void EmitCImp::emitVarProfState() {
+    ofp()->putsPrivate(false);
+    puts("std::map<std::string, std::map<unsigned, unsigned>> __Vvar_prof;\n");
+}
+
 void EmitCImp::emitMTaskState() {
     ofp()->putsPrivate(true);
     AstExecGraph* execGraphp = v3Global.rootp()->execGraphp();
@@ -3149,6 +3185,8 @@ void EmitCImp::emitInt(AstNodeModule* modp) {
             puts("bool __Vm_inhibitSim;  ///< Set true to disable evaluation of module\n");
         }
         if (v3Global.opt.mtasks()) emitMTaskState();
+
+        if (v3Global.opt.profileSigs()) emitVarProfState();
     }
     emitCoverageDecl(modp);  // may flip public/private
 

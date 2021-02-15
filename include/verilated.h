@@ -35,6 +35,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 // <iostream> avoided to reduce compile time
 // <map> avoided and instead in verilated_heavy.h to reduce compile time
 // <string> avoided and instead in verilated_heavy.h to reduce compile time
@@ -501,6 +502,9 @@ public:
     static vluint32_t profThreadsWindow() VL_MT_SAFE { return s_ns.s_profThreadsWindow; }
     static void profThreadsFilenamep(const char* flagp) VL_MT_SAFE;
     static const char* profThreadsFilenamep() VL_MT_SAFE { return s_ns.s_profThreadsFilenamep; }
+
+    /// --prof-sigs related settings
+    static void dumpSigs(const std::map<std::string, std::map<unsigned, unsigned>>& sigs);
 
     typedef void (*VoidPCb)(void*);  // Callback type for below
     /// Callbacks to run on global flush
