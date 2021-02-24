@@ -2475,6 +2475,51 @@ public:
     }
 };
 
+class AstSpecVarRef final : public AstNodeVarRef {
+    // A reference to a speculative variable (lvalue or rvalue)
+public:
+    AstSpecVarRef(FileLine* fl, const string& name, const VAccess& access)
+        : ASTGEN_SUPER(fl, name, nullptr, access) {}
+    // This form only allowed post-link because output/wire compression may
+    // lead to deletion of AstVar's
+    AstSpecVarRef(FileLine* fl, AstVar* varp, const VAccess& access)
+        : ASTGEN_SUPER(fl, varp->name(), varp, access) {}
+
+    ASTNODE_NODE_FUNCS(SpecVarRef)
+    virtual void dump(std::ostream& str) const override;
+    virtual V3Hash sameHash() const override {
+        return V3Hash(V3Hash(varp()->name()), V3Hash(hiernameToProt()));
+    }
+    virtual bool same(const AstNode* samep) const override {
+        return same(static_cast<const AstVarRef*>(samep));
+    }
+    inline bool same(const AstVarRef* samep) const {
+        if (varScopep()) {
+            return (varScopep() == samep->varScopep() && access() == samep->access());
+        } else {
+            return (hiernameToProt() == samep->hiernameToProt()
+                    && hiernameToUnprot() == samep->hiernameToUnprot()
+                    && varp()->name() == samep->varp()->name() && access() == samep->access());
+        }
+    }
+    inline bool sameNoLvalue(AstVarRef* samep) const {
+        if (varScopep()) {
+            return (varScopep() == samep->varScopep());
+        } else {
+            return (hiernameToProt() == samep->hiernameToProt()
+                    && hiernameToUnprot() == samep->hiernameToUnprot()
+                    && (!hiernameToProt().empty() || !samep->hiernameToProt().empty())
+                    && varp()->name() == samep->varp()->name());
+        }
+    }
+    virtual int instrCount() const override {
+        return widthInstrs() * (access().isReadOrRW() ? instrCountLd() : 1);
+    }
+    virtual string emitVerilog() override { V3ERROR_NA_RETURN(""); }
+    virtual string emitC() override { V3ERROR_NA_RETURN(""); }
+    virtual bool cleanOut() const override { return true; }
+};
+
 class AstPin final : public AstNode {
     // A pin on a cell
 private:
