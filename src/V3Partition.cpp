@@ -26,6 +26,8 @@
 #include "V3PartitionGraph.h"
 #include "V3Scoreboard.h"
 #include "V3Stats.h"
+#include "V3Speculation.h"
+#include "V3AstDot.h"
 
 #include <list>
 #include <memory>
@@ -2639,6 +2641,12 @@ void V3Partition::finalize() {
     execGraphp->updateCritPath();
 
     execGraphp->dumpDotFilePrefixedAlways("exec_final");
+    // v3Global.rootp()->dumpDotFilePrefixedAlways("exec_final");
+
+    AstDotDumper dotDumper(v3Global.rootp());
+    dotDumper.dumpDotFilePrefixedAlways("top");
+    V3Speculation spec;
+    spec.go();
 }
 
 void V3Partition::selfTest() {
