@@ -70,6 +70,8 @@ DFG::DFG(AstNode* topp)
 }
 
 void DFG::visit(AstNode* nodep) {
+    if (!nodep) return;
+
     if (m_nodeToDFGVp.count(nodep) == 0) { m_nodeToDFGVp[nodep] = new DFGVertex(this, nodep); }
     auto* nodeDfgp = m_nodeToDFGVp.at(nodep);
     iterateChildren(nodep);
@@ -161,6 +163,15 @@ void DFG::visit(AstNodeAssign* nodep) {
 void DFG::visit(AstCCall* nodep) {
     visit(static_cast<AstNode*>(nodep));
     visit(nodep->funcp());  // follow c-func
+}
+
+void DFG::visit(AstNodeIf* nodep) {
+    visit(static_cast<AstNode*>(nodep));
+
+    // In order, handle condition, then-branch and else-branch
+    visit(nodep->condp());
+    visit(nodep->ifsp());
+    visit(nodep->elsesp());
 }
 
 string DFGVertex::dotShape() const {

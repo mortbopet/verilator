@@ -83,6 +83,8 @@ private:
     virtual void visit(AstVarRef* nodep) override;
     virtual void visit(AstNodeAssign* nodep) override;
     virtual void visit(AstCCall* nodep) override;
+    virtual void visit(AstNodeIf* nodep) override;
+
     /**
      * @brief updateVarDFGSrc
      * @param sourcep
