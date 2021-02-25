@@ -2646,7 +2646,6 @@ void V3Partition::finalize() {
     AstDotDumper dotDumper(v3Global.rootp());
     dotDumper.dumpDotFilePrefixedAlways("top");
     V3Speculation spec;
-    spec.go();
 }
 
 void V3Partition::selfTest() {

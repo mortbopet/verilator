@@ -18,6 +18,8 @@
 #include "V3Ast.h"
 #include "V3PartitionGraph.h"
 
+#include <algorithm>
+
 //######################################################################
 // Utilities
 
@@ -64,17 +66,17 @@ public:
 //######################################################################
 // DFG
 
-DFG::DFG(AstNode* topp)
-    : m_topp(topp) {
-    iterate(topp);
+DFG::DFG(AstMTaskBody* bodyp)
+    : m_bodyp(bodyp) {
+    iterate(bodyp);
 }
 
 void DFG::visit(AstNode* nodep) {
     if (!nodep) return;
 
-    if (m_nodeToDFGVp.count(nodep) == 0) { m_nodeToDFGVp[nodep] = new DFGVertex(this, nodep); }
-    auto* nodeDfgp = m_nodeToDFGVp.at(nodep);
     iterateChildren(nodep);
+
+    DFGVertex* nodeDfgp = nullptr;
 
     for (auto* childp : {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
         if (childp == nullptr) continue;
@@ -90,20 +92,26 @@ void DFG::visit(AstNode* nodep) {
             }
             srcvtp = m_varToDFGVp.at(varrefp->varp());
         } else {
-            auto it = m_nodeToDFGVp.find(childp);
-            UASSERT(it != m_nodeToDFGVp.end(), "Should have been created");
-            srcvtp = it->second;
+            if (m_nodeToDFGVp.count(nodep) == 0) {
+                m_nodeToDFGVp[nodep] = new DFGVertex(this, nodep);
+            }
+            nodeDfgp = m_nodeToDFGVp[nodep];
+            if (m_nodeToDFGVp.count(childp) == 0) {
+                m_nodeToDFGVp[childp] = new DFGVertex(this, childp);
+            }
+            srcvtp = m_nodeToDFGVp[childp];
         }
 
-        if (varrefp) { m_io.ins.insert(varrefp->varp()); }
-
-        if (srcvtp != nodeDfgp) { new DFGEdge(this, srcvtp, nodeDfgp, 1); }
+        if (varrefp) {
+            m_io.ins.insert(varrefp->varp());
+            varrefp->varp()->addConsumingMTaskId(m_bodyp->execMTaskp()->id());
+        }
+        if (srcvtp != nodeDfgp && nodeDfgp != nullptr) { new DFGEdge(this, srcvtp, nodeDfgp, 1); }
     }
 }
 
 void DFG::visit(AstVar* nodep) {
-    UASSERT(false, "???");
-
+    // UASSERT(false, "???");
     visit(static_cast<AstNode*>(nodep));
 }
 
@@ -137,10 +145,13 @@ void DFG::visit(AstNodeAssign* nodep) {
     visit(static_cast<AstNode*>(nodep));
 
     AstNodeVarRef* varrefp = dynamic_cast<AstNodeVarRef*>(nodep->lhsp());
+    if (varrefp == nullptr) { return; }
     UASSERT(varrefp, "Assignment to non-variable?");
+
     AstVar* varp = varrefp->varp();
 
     m_io.outs.insert(varp);
+    varrefp->varp()->addProducingMTaskId(m_bodyp->execMTaskp()->id());
 
     auto it = m_varToDFGVp.find(varp);
     DFGVertex* oldsrcp = nullptr;
@@ -169,9 +180,9 @@ void DFG::visit(AstNodeIf* nodep) {
     visit(static_cast<AstNode*>(nodep));
 
     // In order, handle condition, then-branch and else-branch
-    visit(nodep->condp());
-    visit(nodep->ifsp());
-    visit(nodep->elsesp());
+    // visit(nodep->condp());
+    // visit(nodep->ifsp());
+    // visit(nodep->elsesp());
 }
 
 string DFGVertex::dotShape() const {
@@ -205,17 +216,187 @@ string DFGVertex::name() const {
 //######################################################################
 // V3Speculation
 
-V3Speculation::V3Speculation() {}
+V3Speculation::V3Speculation() {
+    // Process each module in turn
+    for (AstNodeModule* nodep = v3Global.rootp()->modulesp(); nodep;
+         nodep = VN_CAST(nodep->nextp(), NodeModule)) {
+        speculateModule(nodep);
+    }
+}
 
-void V3Speculation::go() {
-    // Gather DFGs for each MTask
+void V3Speculation::speculateModule(AstNodeModule* modp) {
+    // Locate module variables
+    std::vector<AstVar*> variables;
+    for (AstNode* nodep = modp->stmtsp(); nodep; nodep = nodep->nextp()) {
+        if (AstVar* varp = dynamic_cast<AstVar*>(nodep)) {
+            // Reset producer/consumer IDs (updated later)
+            varp->clearMTaskIds();
+            variables.push_back(varp);
+        }
+    }
+
+    // Gather DFGs for each MTask. This also updates the producer/consumer info of each variable
     const V3Graph* mtasksp = v3Global.rootp()->execGraphp()->depGraphp();
     for (V3GraphVertex* vxp = mtasksp->verticesBeginp(); vxp; vxp = vxp->verticesNextp()) {
         ExecMTask* mtaskp = dynamic_cast<ExecMTask*>(vxp);
         m_dfgs[mtaskp] = new DFG(mtaskp->bodyp());
+        m_mtaskIdToMTask[mtaskp->id()] = mtaskp;
     }
 
-    if (debug()) {
-        for (const auto& it : m_dfgs) { it.second->dumpDotFilePrefixedAlways(it.first->name()); }
+    // Filter the set of boolean variables which are available for speculation.
+    // This helps us narrow the search for potential MTasks to speculate.
+
+    // Local filtering
+    std::vector<AstVar*> boolVars1;
+    std::copy_if(
+        variables.begin(), variables.end(), std::back_inserter(boolVars1), [](const AstVar* varp) {
+            bool relevant = true;
+            relevant &= varp->widthMin() == 1;
+            relevant &= varp->consMtaskIds().size() > 0;  // Must be a dependency
+            relevant &= varp->prodMtaskIds().size() == 1;  // Must be an output of another Mtask
+            return relevant;
+        });
+
+    // Dependency filtering
+    // Filter to the set of dependencies which result as an in-evaluation dependency
+    // rank(producing node) < rank(consuming node)
+    v3Global.rootp()->execGraphp()->mutableDepGraphp()->order();
+    std::vector<AstVar*> boolVars2;
+    std::copy_if(
+        boolVars1.begin(), boolVars1.end(), std::back_inserter(boolVars2),
+        [this](const AstVar* varp) {
+            // Produced by
+            const int prodRank = m_mtaskIdToMTask.at(*varp->prodMtaskIds().begin())->rank();
+
+            return std::any_of(varp->consMtaskIds().begin(), varp->consMtaskIds().end(),
+                               [&](int mtaskid) {
+                                   const int consRank = m_mtaskIdToMTask.at(mtaskid)->rank();
+                                   return prodRank < consRank;  // todo: <= here indicates mtasks
+                                                                // that might be split-able!
+                               });
+        });
+
+    // Locate boolean edges in the dependency graph
+    struct Speculateable {
+        ExecMTask* prod = nullptr;
+        std::vector<ExecMTask*> cons;
+    };
+
+    std::map<AstVar*, Speculateable> speculateable;
+    for (AstVar* varp : boolVars2) {
+        ExecMTask* prodp = m_mtaskIdToMTask.at(*varp->prodMtaskIds().begin());
+
+        // Locate MTasks which depend on this variable:
+        // - There is an edge between the two MTasks
+        // - The given variable is the only depending variable produced by the source MTask
+        //
+        // Due to transitive edges, the consuming MTask can inherit the incoming dependencies of
+        // the producing mtask through speculation.
+        for (V3GraphEdge* edgep = prodp->outBeginp(); edgep; edgep = edgep->outNextp()) {
+            ExecMTask* consp = dynamic_cast<ExecMTask*>(edgep->top());
+
+            std::vector<AstVar*> sharedVars;
+
+            auto& prodOuts = m_dfgs.at(prodp)->outs();
+            auto& consIns = m_dfgs.at(consp)->ins();
+
+            UASSERT(std::find(prodOuts.begin(), prodOuts.end(), varp) != prodOuts.end(),
+                    "varp should be in produced set of producing mtask");
+
+            std::set_intersection(prodOuts.begin(), prodOuts.end(), consIns.begin(), consIns.end(),
+                                  std::back_inserter(sharedVars));
+
+            if (sharedVars.size() == 1
+                && std::find(sharedVars.begin(), sharedVars.end(), varp) != sharedVars.end()) {
+                UASSERT(std::find(consIns.begin(), consIns.end(), varp) != consIns.end(),
+                        "varp should be in consumed set of consuming mtask");
+
+                auto it = speculateable.find(varp);
+                if (it == speculateable.end()) {
+                    it = speculateable.insert(it, {varp, Speculateable()});
+                }
+                UASSERT(it->second.prod == nullptr || it->second.prod == prodp,
+                        "Multiple producers not allowed at this point");
+                it->second.prod = prodp;
+                it->second.cons.push_back(consp);
+            }
+        }
     }
+
+    if (debug() || true) {
+        std::cout << "Speculateable variables/partitions are" << endl;
+        for (const auto& it : speculateable) {
+            std::cout << "\t" << it.first->origName() << " (mt" << it.second.prod->id() << " "
+                      << it.second.prod->cost() << ") -> ";
+            for (const auto& consp : it.second.cons) {
+                std::cout << "(mt" << consp->id() << " " << consp->cost() << ") ";
+            }
+            std::cout << endl;
+        }
+    }
+
+    return;
 }
+
+class BoolReplaceVisitor final : public AstNVisitor {
+private:
+    AstVar* m_varp;
+    bool m_branch;
+
+    void replaceBool(AstNode* oldp, bool value) {
+        UASSERT(oldp, "Null old");
+        AstNode* newp = new AstConst(oldp->fileline(), value);
+        newp->dtypeFrom(oldp);
+        oldp->replaceWith(newp);
+        VL_DO_DANGLING(oldp->deleteTree(), oldp);
+    }
+
+    /**
+     * @brief findModp
+     * recursively backtrack the parent of @p nodep to locate the parent module.
+     */
+    AstModule* findModp(AstNode* nodep) {
+        UASSERT(nodep, "Tried to find parent module of node not inside a module");
+        if (auto* modp = dynamic_cast<AstModule*>(nodep)) {
+            return modp;
+        } else {
+            return findModp(nodep->backp());
+        }
+    }
+
+    void visit(AstNode* nodep) { iterateChildren(nodep); }
+
+    void visit(AstVarRef* varrefp) {
+        if (varrefp->varp() && varrefp->varp() == m_varp) {
+            replaceBool(varrefp, m_branch);
+        } else {
+            visit(static_cast<AstNode*>(varrefp));
+        }
+    }
+
+    void visit(AstCCall* ccallp) {
+
+        // Create a duplicate of the called C function, and perform boolean const propagation into
+        // this function.
+        const AstCFunc* origfuncp = ccallp->funcp();
+        AstCFunc* specfuncp = ccallp->funcp()->cloneTree(true);  // i think true here?
+        specfuncp->name(specfuncp->name() + "_" + m_varp->name() + "_spec_"
+                        + (m_branch ? "true" : "false"));
+        origfuncp->scopep()->addActivep(specfuncp);
+
+        // Replace the function call to the new, speculative function
+        auto newFuncCall = new AstCCall(ccallp->fileline(), specfuncp, ccallp->argsp());
+        ccallp->replaceWith(newFuncCall);
+
+        // Iterate into the speculative function, further replacing occurances of m_varp
+        visit(specfuncp);
+    }
+
+public:
+    explicit BoolReplaceVisitor(AstMTaskBody* bodyp, AstVar* varp, bool branch)
+        : m_varp(varp)
+        , m_branch(branch) {
+        auto* bodyp_spec = bodyp->cloneTree(true);
+        visit(bodyp_spec);
+    }
+};

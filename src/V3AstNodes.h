@@ -1952,6 +1952,8 @@ private:
     bool m_isLatched : 1;  // Not assigned in all control paths of combo always
     VLifetime m_lifetime;  // Lifetime
     VVarAttrClocker m_attrClocker;
+    MTaskIdSet m_prodMtaskIds;  // MTaskID's that write this var
+    MTaskIdSet m_consMtaskIds;  // MTaskID's that read this var
     MTaskIdSet m_mtaskIds;  // MTaskID's that read or write this var
 
     void init() {
@@ -2248,9 +2250,23 @@ public:
         m_name = name;
     }
     static AstVar* scVarRecurse(AstNode* nodep);
-    void addProducingMTaskId(int id) { m_mtaskIds.insert(id); }
-    void addConsumingMTaskId(int id) { m_mtaskIds.insert(id); }
+    void addProducingMTaskId(int id) {
+        m_prodMtaskIds.insert(id);
+        m_mtaskIds.insert(id);
+    }
+    void addConsumingMTaskId(int id) {
+        m_consMtaskIds.insert(id);
+        m_mtaskIds.insert(id);
+    }
+    void clearMTaskIds() {
+        m_mtaskIds.clear();
+        m_consMtaskIds.clear();
+        m_prodMtaskIds.clear();
+    }
     const MTaskIdSet& mtaskIds() const { return m_mtaskIds; }
+    const MTaskIdSet& consMtaskIds() const { return m_consMtaskIds; }
+    const MTaskIdSet& prodMtaskIds() const { return m_prodMtaskIds; }
+
     string mtasksString() const;
 };
 
@@ -5547,9 +5563,9 @@ public:
                        : (m_urandom ? "%f$urandom()" : "%f$random()");
     }
     virtual string emitC() override {
-        return m_reset
-                   ? "VL_RAND_RESET_%nq(%nw, %P)"
-                   : seedp() ? "VL_RANDOM_SEEDED_%nq%lq(%nw, %P, %li)" : "VL_RANDOM_%nq(%nw, %P)";
+        return m_reset   ? "VL_RAND_RESET_%nq(%nw, %P)"
+               : seedp() ? "VL_RANDOM_SEEDED_%nq%lq(%nw, %P, %li)"
+                         : "VL_RANDOM_%nq(%nw, %P)";
     }
     virtual bool cleanOut() const override { return true; }
     virtual bool isGateOptimizable() const override { return false; }

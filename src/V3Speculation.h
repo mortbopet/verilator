@@ -63,7 +63,7 @@ private:
 class DFG final : public AstNVisitor, public V3Graph {
 public:
     // CONSTRUCTORS
-    explicit DFG(AstNode* nodep);
+    explicit DFG(AstMTaskBody* bodyp);
     DFG() { UASSERT(false, "Illegal null-construction of DFG"); }
 
     // Configuration
@@ -95,7 +95,7 @@ private:
      */
     DFGVertex* updateVarDFGSrc(AstNode* sourcep, AstVar* varp);
 
-    AstNode* m_topp;
+    AstMTaskBody* m_bodyp;
     VarIO m_io;
 
     // Tracking of current variable to most-recent source node in DFG
@@ -113,14 +113,24 @@ class V3Speculation {
 public:
     V3Speculation();
 
-    void go();
-
 private:
+    void speculateModule(AstNodeModule* nodep);
+
+    /**
+     * @brief removeDependency
+     * Removes dependency on @param varp from @param mtaskp. In doing so, we re-create dependency
+     * edges from _all other_ variables that mtaskp is dependent on. Later, through removal of
+     * transitive edges, only a single of these edges will remain.
+     *
+     */
+    void removeDependency(ExecMTask* mtaskp, AstVar* varp);
+
     /**
      * @brief m_dataflow
      * Maintains the in- and output variables of MTasks and CFuncs
      */
     std::unordered_map<ExecMTask*, DFG*> m_dfgs;
+    std::map<int, ExecMTask*> m_mtaskIdToMTask;
 };
 
 #endif  // Guard
