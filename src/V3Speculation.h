@@ -114,7 +114,19 @@ public:
     V3Speculation();
 
 private:
+    /**
+     * @brief The Speculateable struct
+     * Maintains the set of producer/consumer MTasks which share a boolean variable, wherein the
+     * relationship has been determined to be speculateable.
+     */
+    struct Speculateable {
+        AstVar* specVar = nullptr;
+        ExecMTask* prod = nullptr;
+        std::vector<ExecMTask*> cons;
+    };
+
     void speculateModule(AstNodeModule* nodep);
+    void doSpeculation(const Speculateable& s);
 
     /**
      * @brief removeDependency

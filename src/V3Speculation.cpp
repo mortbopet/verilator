@@ -214,6 +214,112 @@ string DFGVertex::name() const {
 }
 
 //######################################################################
+// SpeculationReplaceVisitor
+
+class SpeculativeReplaceVisitor final : public AstNVisitor {
+private:
+    // Mapping between non-speculative to replaced speculative variable, which is being written to
+    // in the partition.
+    std::unordered_map<AstVar*, AstVar*> m_specOutVars;
+    AstVar* m_varp;  // Boolean variable to speculate on
+    bool m_branch;
+    AstMTaskBody* m_mtaskp;
+    AstModule* m_modp;
+
+    string nameSuffix() const { return "__SPEC__" + string(m_branch ? "t" : "f"); }
+
+    void replaceBool(AstNode* oldp, bool value) {
+        UASSERT(oldp, "Null old");
+        AstNode* newp = new AstConst(oldp->fileline(), value);
+        newp->dtypeFrom(oldp);
+        oldp->replaceWith(newp);
+        VL_DO_DANGLING(oldp->deleteTree(), oldp);
+    }
+
+    /**
+     * @brief findModp
+     * recursively backtrack the parent of @p nodep to locate the parent module.
+     */
+    AstModule* findModp(AstNode* nodep) {
+        while (nodep != nullptr) {
+            auto* modp = dynamic_cast<AstModule*>(nodep);
+            if (modp) {
+                return modp;
+            } else {
+                nodep = nodep->backp();
+            }
+        }
+        UASSERT(nodep, "Tried to find parent module of node not inside a module");
+        return nullptr;
+    }
+
+    void visit(AstNode* nodep) { iterateChildren(nodep); }
+
+    void visit(AstNodeAssign* assignp) {
+        auto* varrefp = dynamic_cast<AstVarRef*>(assignp->lhsp());
+        UASSERT(varrefp, "Assignment to non-variable?");
+        AstVar* prevarp = varrefp->varp();
+        UASSERT(prevarp != m_varp, "Assignment to variable we speculate on?");
+
+        // Find (or construct) speculative output variable
+        auto replVarp = m_specOutVars.find(prevarp);
+        if (replVarp == m_specOutVars.end()) {
+            AstVar* specVarp = prevarp->cloneTree(false);
+            specVarp->name(specVarp->name() + nameSuffix());
+            m_modp->addStmtp(specVarp);
+            replVarp = m_specOutVars.insert(m_specOutVars.end(), {prevarp, specVarp});
+        }
+
+        // And replace
+        varrefp->varp(replVarp->second);
+
+        visit(static_cast<AstNode*>(assignp));
+    }
+
+    void visit(AstVarRef* varrefp) {
+        AstVar* varp = varrefp->varp();
+        if (varp == m_varp) {
+            replaceBool(varrefp, m_branch);
+            return;
+        }
+
+        auto it = m_specOutVars.find(varp);
+        if (it != m_specOutVars.end()) {
+            // Replace reference with speculative variable
+            varrefp->varp(it->second);
+        }
+
+        visit(static_cast<AstNode*>(varrefp));
+    }
+
+    void visit(AstCCall* ccallp) {
+        // Create a duplicate of the called C function, and perform boolean const propagation into
+        // this function.
+        const AstCFunc* origfuncp = ccallp->funcp();
+        AstCFunc* specfuncp = ccallp->funcp()->cloneTree(false);  // i think true here?
+        specfuncp->name(specfuncp->name() + nameSuffix());
+        origfuncp->scopep()->addActivep(specfuncp);
+
+        // Replace the function call to the new, speculative function
+        auto newFuncCall = new AstCCall(ccallp->fileline(), specfuncp, ccallp->argsp());
+        ccallp->replaceWith(newFuncCall);
+
+        // Iterate into the speculative function, further replacing occurances of m_varp
+        visit(specfuncp);
+    }
+
+public:
+    explicit SpeculativeReplaceVisitor(AstMTaskBody* bodyp, AstVar* varp, bool branch)
+        : m_varp(varp)
+        , m_branch(branch)
+        , m_mtaskp(bodyp) {
+        auto* bodyp_spec = bodyp->cloneTree(false);
+        m_modp = findModp(varp);
+        visit(bodyp_spec);
+    }
+};
+
+//######################################################################
 // V3Speculation
 
 V3Speculation::V3Speculation() {
@@ -221,6 +327,20 @@ V3Speculation::V3Speculation() {
     for (AstNodeModule* nodep = v3Global.rootp()->modulesp(); nodep;
          nodep = VN_CAST(nodep->nextp(), NodeModule)) {
         speculateModule(nodep);
+    }
+}
+
+void V3Speculation::doSpeculation(const Speculateable& s) {
+
+    for (const auto& consmtaskp : s.cons) {
+        // Duplicate the MTask, representing the true and false constant value of the speculation
+        // variable
+        auto* consmtaskp_t = consmtaskp->bodyp()->cloneTree(false);
+        auto* consmtaskp_f = consmtaskp->bodyp()->cloneTree(false);
+
+        // Speculate into them
+        SpeculativeReplaceVisitor(consmtaskp_t, s.specVar, true);
+        SpeculativeReplaceVisitor(consmtaskp_f, s.specVar, false);
     }
 }
 
@@ -277,11 +397,6 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
         });
 
     // Locate boolean edges in the dependency graph
-    struct Speculateable {
-        ExecMTask* prod = nullptr;
-        std::vector<ExecMTask*> cons;
-    };
-
     std::map<AstVar*, Speculateable> speculateable;
     for (AstVar* varp : boolVars2) {
         ExecMTask* prodp = m_mtaskIdToMTask.at(*varp->prodMtaskIds().begin());
@@ -314,10 +429,11 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
                 auto it = speculateable.find(varp);
                 if (it == speculateable.end()) {
                     it = speculateable.insert(it, {varp, Speculateable()});
+                    it->second.prod = prodp;
+                    it->second.specVar = varp;
                 }
                 UASSERT(it->second.prod == nullptr || it->second.prod == prodp,
                         "Multiple producers not allowed at this point");
-                it->second.prod = prodp;
                 it->second.cons.push_back(consp);
             }
         }
@@ -335,68 +451,8 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
         }
     }
 
+    // Go speculate!
+    for (const auto& s : speculateable) { doSpeculation(s.second); }
+
     return;
 }
-
-class BoolReplaceVisitor final : public AstNVisitor {
-private:
-    AstVar* m_varp;
-    bool m_branch;
-
-    void replaceBool(AstNode* oldp, bool value) {
-        UASSERT(oldp, "Null old");
-        AstNode* newp = new AstConst(oldp->fileline(), value);
-        newp->dtypeFrom(oldp);
-        oldp->replaceWith(newp);
-        VL_DO_DANGLING(oldp->deleteTree(), oldp);
-    }
-
-    /**
-     * @brief findModp
-     * recursively backtrack the parent of @p nodep to locate the parent module.
-     */
-    AstModule* findModp(AstNode* nodep) {
-        UASSERT(nodep, "Tried to find parent module of node not inside a module");
-        if (auto* modp = dynamic_cast<AstModule*>(nodep)) {
-            return modp;
-        } else {
-            return findModp(nodep->backp());
-        }
-    }
-
-    void visit(AstNode* nodep) { iterateChildren(nodep); }
-
-    void visit(AstVarRef* varrefp) {
-        if (varrefp->varp() && varrefp->varp() == m_varp) {
-            replaceBool(varrefp, m_branch);
-        } else {
-            visit(static_cast<AstNode*>(varrefp));
-        }
-    }
-
-    void visit(AstCCall* ccallp) {
-
-        // Create a duplicate of the called C function, and perform boolean const propagation into
-        // this function.
-        const AstCFunc* origfuncp = ccallp->funcp();
-        AstCFunc* specfuncp = ccallp->funcp()->cloneTree(true);  // i think true here?
-        specfuncp->name(specfuncp->name() + "_" + m_varp->name() + "_spec_"
-                        + (m_branch ? "true" : "false"));
-        origfuncp->scopep()->addActivep(specfuncp);
-
-        // Replace the function call to the new, speculative function
-        auto newFuncCall = new AstCCall(ccallp->fileline(), specfuncp, ccallp->argsp());
-        ccallp->replaceWith(newFuncCall);
-
-        // Iterate into the speculative function, further replacing occurances of m_varp
-        visit(specfuncp);
-    }
-
-public:
-    explicit BoolReplaceVisitor(AstMTaskBody* bodyp, AstVar* varp, bool branch)
-        : m_varp(varp)
-        , m_branch(branch) {
-        auto* bodyp_spec = bodyp->cloneTree(true);
-        visit(bodyp_spec);
-    }
-};

@@ -2632,6 +2632,8 @@ void V3Partition::finalize() {
     // ExecMTask.
     finalizeCosts(execGraphp->mutableDepGraphp());
 
+    V3Speculation spec;
+
     // "Pack" the mtasks: statically associate each mtask with a thread,
     // and determine the order in which each thread will runs its mtasks.
     PartPackMTasks(execGraphp->mutableDepGraphp()).go();
@@ -2645,7 +2647,6 @@ void V3Partition::finalize() {
 
     AstDotDumper dotDumper(v3Global.rootp());
     dotDumper.dumpDotFilePrefixedAlways("top");
-    V3Speculation spec;
 }
 
 void V3Partition::selfTest() {
