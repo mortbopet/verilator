@@ -2625,14 +2625,15 @@ void V3Partition::finalize() {
     AstExecGraph* execGraphp = v3Global.rootp()->execGraphp();
     UASSERT(execGraphp, "Couldn't find AstExecGraph singleton.");
 
+    finalizeCosts(execGraphp->mutableDepGraphp());
+    V3Speculation spec;
+
     // Back in V3Order, we partitioned mtasks using provisional cost
     // estimates. However, V3Order precedes some optimizations (notably
     // V3LifePost) that can change the cost of logic within each mtask.
     // Now that logic is final, recompute the cost and priority of each
     // ExecMTask.
     finalizeCosts(execGraphp->mutableDepGraphp());
-
-    V3Speculation spec;
 
     // "Pack" the mtasks: statically associate each mtask with a thread,
     // and determine the order in which each thread will runs its mtasks.
@@ -2645,8 +2646,8 @@ void V3Partition::finalize() {
     execGraphp->dumpDotFilePrefixedAlways("exec_final");
     // v3Global.rootp()->dumpDotFilePrefixedAlways("exec_final");
 
-    AstDotDumper dotDumper(v3Global.rootp());
-    dotDumper.dumpDotFilePrefixedAlways("top");
+    //  AstDotDumper dotDumper(v3Global.rootp());
+    //  dotDumper.dumpDotFilePrefixedAlways("top");
 }
 
 void V3Partition::selfTest() {

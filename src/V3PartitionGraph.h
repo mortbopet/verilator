@@ -53,6 +53,9 @@ public:
 };
 
 class ExecMTask final : public AbstractMTask {
+public:
+    enum Speculative { None, True, False };
+
 private:
     AstMTaskBody* m_bodyp;  // Task body
     uint32_t m_id;  // Unique id of this mtask.
@@ -71,13 +74,24 @@ private:
     // or 0xffffffff if not yet assigned.
     const ExecMTask* m_packNextp = nullptr;  // Next for static (pack_mtasks) scheduling
     bool m_threadRoot = false;  // Is root thread
+    Speculative m_spec = Speculative::None;  // is speculatives
     VL_UNCOPYABLE(ExecMTask);
 
+    string specSuffix() const {
+        switch (m_spec) {
+        case Speculative::None: return "";
+        case Speculative::True: return "__SPEC__t";
+        case Speculative::False: return "__SPEC__f";
+        }
+    }
+
 public:
-    ExecMTask(V3Graph* graphp, AstMTaskBody* bodyp, uint32_t id)
+    ExecMTask(V3Graph* graphp, AstMTaskBody* bodyp, uint32_t id,
+              Speculative spec = Speculative::None)
         : AbstractMTask{graphp}
         , m_bodyp{bodyp}
-        , m_id{id} {}
+        , m_id{id}
+        , m_spec(spec) {}
     AstMTaskBody* bodyp() const { return m_bodyp; }
     virtual uint32_t id() const override { return m_id; }
     uint32_t priority() const { return m_priority; }
@@ -97,11 +111,13 @@ public:
     const ExecMTask* packNextp() const { return m_packNextp; }
     bool threadRoot() const { return m_threadRoot; }
     void threadRoot(bool threadRoot) { m_threadRoot = threadRoot; }
+    void speculative(Speculative spec) { m_spec = spec; }
+    Speculative speculative() const { return m_spec; }
     string cFuncName() const {
         // If this MTask maps to a C function, this should be the name
-        return string("__Vmtask") + "__" + cvtToStr(m_id);
+        return string("__Vmtask") + "__" + cvtToStr(m_id) + specSuffix();
     }
-    virtual string name() const override { return string("mt") + cvtToStr(id()); }
+    virtual string name() const override { return string("mt") + cvtToStr(id()) + specSuffix(); }
     void dump(std::ostream& str) const {
         str << name() << "." << cvtToHex(this);
         if (priority() || cost()) str << " [pr=" << priority() << " c=" << cvtToStr(cost()) << "]";

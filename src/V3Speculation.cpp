@@ -17,6 +17,7 @@
 #include "V3Speculation.h"
 #include "V3Ast.h"
 #include "V3PartitionGraph.h"
+#include "V3AstDot.h"
 
 #include <algorithm>
 
@@ -216,6 +217,8 @@ string DFGVertex::name() const {
 //######################################################################
 // SpeculationReplaceVisitor
 
+inline string specNameSuffix(bool branch) { return "__SPEC__" + string(branch ? "t" : "f"); }
+
 class SpeculativeReplaceVisitor final : public AstNVisitor {
 private:
     // Mapping between non-speculative to replaced speculative variable, which is being written to
@@ -224,9 +227,10 @@ private:
     AstVar* m_varp;  // Boolean variable to speculate on
     bool m_branch;
     AstMTaskBody* m_mtaskp;
-    AstModule* m_modp;
+    AstNodeModule* m_modp;
+    int m_it = 0;
 
-    string nameSuffix() const { return "__SPEC__" + string(m_branch ? "t" : "f"); }
+    string nameSuffix() const { return specNameSuffix(m_branch); }
 
     void replaceBool(AstNode* oldp, bool value) {
         UASSERT(oldp, "Null old");
@@ -261,6 +265,9 @@ private:
         AstVar* prevarp = varrefp->varp();
         UASSERT(prevarp != m_varp, "Assignment to variable we speculate on?");
 
+        assignp->dump(cout);
+        cout << endl;
+
         // Find (or construct) speculative output variable
         auto replVarp = m_specOutVars.find(prevarp);
         if (replVarp == m_specOutVars.end()) {
@@ -293,10 +300,13 @@ private:
     }
 
     void visit(AstCCall* ccallp) {
-        // Create a duplicate of the called C function, and perform boolean const propagation into
-        // this function.
+        AstDotDumper dumper(m_mtaskp);
+        dumper.dumpDotFilePrefixedAlways("pre_ccall" + std::to_string(m_it));
+
+        // Create a duplicate of the called C function, and perform boolean const propagation
+        // into this function.
         const AstCFunc* origfuncp = ccallp->funcp();
-        AstCFunc* specfuncp = ccallp->funcp()->cloneTree(false);  // i think true here?
+        AstCFunc* specfuncp = ccallp->funcp()->cloneTree(true);  // i think true here?
         specfuncp->name(specfuncp->name() + nameSuffix());
         origfuncp->scopep()->addActivep(specfuncp);
 
@@ -304,18 +314,23 @@ private:
         auto newFuncCall = new AstCCall(ccallp->fileline(), specfuncp, ccallp->argsp());
         ccallp->replaceWith(newFuncCall);
 
+        AstDotDumper dumper2(m_mtaskp);
+        dumper2.dumpDotFilePrefixedAlways("post_ccall" + std::to_string(m_it));
+
+        m_it++;
+
         // Iterate into the speculative function, further replacing occurances of m_varp
         visit(specfuncp);
     }
 
 public:
-    explicit SpeculativeReplaceVisitor(AstMTaskBody* bodyp, AstVar* varp, bool branch)
+    explicit SpeculativeReplaceVisitor(AstNodeModule* modp, AstMTaskBody* bodyp, AstVar* varp,
+                                       bool branch)
         : m_varp(varp)
         , m_branch(branch)
-        , m_mtaskp(bodyp) {
-        auto* bodyp_spec = bodyp->cloneTree(false);
-        m_modp = findModp(varp);
-        visit(bodyp_spec);
+        , m_mtaskp(bodyp)
+        , m_modp(modp) {
+        visit(bodyp);
     }
 };
 
@@ -330,18 +345,34 @@ V3Speculation::V3Speculation() {
     }
 }
 
-void V3Speculation::doSpeculation(const Speculateable& s) {
+void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
+    auto* execGraphp = v3Global.rootp()->execGraphp();
 
     for (const auto& consmtaskp : s.cons) {
         // Duplicate the MTask, representing the true and false constant value of the speculation
         // variable
-        auto* consmtaskp_t = consmtaskp->bodyp()->cloneTree(false);
-        auto* consmtaskp_f = consmtaskp->bodyp()->cloneTree(false);
+        auto* consmtbodyp_t = consmtaskp->bodyp()->cloneTree(false);
+        auto* consmtbodyp_f = consmtaskp->bodyp()->cloneTree(false);
 
         // Speculate into them
-        SpeculativeReplaceVisitor(consmtaskp_t, s.specVar, true);
-        SpeculativeReplaceVisitor(consmtaskp_f, s.specVar, false);
+        SpeculativeReplaceVisitor(modp, consmtbodyp_t, s.specVar, true);
+        SpeculativeReplaceVisitor(modp, consmtbodyp_f, s.specVar, false);
+
+        // Insert them into the dependency graph
+        execGraphp->addMTaskBody(consmtbodyp_t);
+        execGraphp->addMTaskBody(consmtbodyp_f);
+
+        // Create ExecMTasks
+        auto* consmtp_t = new ExecMTask(execGraphp->mutableDepGraphp(), consmtbodyp_t,
+                                        m_nextMTaskID++, ExecMTask::Speculative::True);
+        auto* consmtp_f = new ExecMTask(execGraphp->mutableDepGraphp(), consmtbodyp_f,
+                                        m_nextMTaskID++, ExecMTask::Speculative::False);
+
+        // Create dependency edges for all incoming variables except the speculated boolean
     }
+
+    // Remove redundant dependency edges
+    execGraphp->mutableDepGraphp()->removeTransitiveEdges();
 }
 
 void V3Speculation::speculateModule(AstNodeModule* modp) {
@@ -359,6 +390,7 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
     const V3Graph* mtasksp = v3Global.rootp()->execGraphp()->depGraphp();
     for (V3GraphVertex* vxp = mtasksp->verticesBeginp(); vxp; vxp = vxp->verticesNextp()) {
         ExecMTask* mtaskp = dynamic_cast<ExecMTask*>(vxp);
+        m_nextMTaskID = m_nextMTaskID <= mtaskp->id() ? mtaskp->id() + 1 : m_nextMTaskID;
         m_dfgs[mtaskp] = new DFG(mtaskp->bodyp());
         m_mtaskIdToMTask[mtaskp->id()] = mtaskp;
     }
@@ -452,7 +484,7 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
     }
 
     // Go speculate!
-    for (const auto& s : speculateable) { doSpeculation(s.second); }
+    for (const auto& s : speculateable) { doSpeculation(modp, s.second); }
 
     return;
 }

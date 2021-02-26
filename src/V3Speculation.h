@@ -126,7 +126,7 @@ private:
     };
 
     void speculateModule(AstNodeModule* nodep);
-    void doSpeculation(const Speculateable& s);
+    void doSpeculation(AstNodeModule* modp, const Speculateable& s);
 
     /**
      * @brief removeDependency
@@ -143,6 +143,7 @@ private:
      */
     std::unordered_map<ExecMTask*, DFG*> m_dfgs;
     std::map<int, ExecMTask*> m_mtaskIdToMTask;
+    unsigned m_nextMTaskID = 0;
 };
 
 #endif  // Guard
