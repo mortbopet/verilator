@@ -252,16 +252,16 @@ void AstExecGraph::updateCritPath() {
     }
 }
 
-void AstExecGraph::dumpDotFilePrefixed(const string& nameComment) const {
-    if (v3Global.opt.dumpTree()) dumpDotFilePrefixedAlways(nameComment);
+void AstExecGraph::dumpDotFilePrefixed(const string& nameComment, const bool packed) const {
+    if (v3Global.opt.dumpTree()) dumpDotFilePrefixedAlways(nameComment, packed);
 }
 
 //! Variant of dumpDotFilePrefixed without --dump option check
-void AstExecGraph::dumpDotFilePrefixedAlways(const string& nameComment) const {
-    dumpDotFile(v3Global.debugFilename(nameComment) + ".dot");
+void AstExecGraph::dumpDotFilePrefixedAlways(const string& nameComment, const bool packed) const {
+    dumpDotFile(v3Global.debugFilename(nameComment) + ".dot", packed);
 }
 
-void AstExecGraph::dumpDotFile(const string& filename) const {
+void AstExecGraph::dumpDotFile(const string& filename, const bool packed) const {
     // This generates a file used by graphviz, https://www.graphviz.org
     const std::unique_ptr<std::ofstream> logp(V3File::new_ofstream(filename));
     if (logp->fail()) v3fatal("Can't write " << filename);
@@ -293,21 +293,53 @@ void AstExecGraph::dumpDotFile(const string& filename) const {
         }
     }
 
+    // Map of right-hand side x poisition of all MTasks in the plot
+    std::map<const ExecMTask*, double> mtaskrhs;
+    std::map<unsigned, double> threadrhs;
+    for (int i = 0; i < v3Global.opt.threads(); i++) { threadrhs[i] = 0; }
+
+    auto mtaskXPos = [&](const ExecMTask* mtaskp, const double nodeWidth) {
+        double startPosX = 0;
+        if (packed) {
+            startPosX = (minWidth * mtaskp->startTime()) / minCost;
+        } else {
+            // Position at max(own thread RHS, incoming dependency RHS)
+            startPosX = threadrhs[mtaskp->thread()];
+            for (V3GraphEdge* edgep = mtaskp->inBeginp(); edgep; edgep = edgep->inNextp()) {
+                const ExecMTask* depp = dynamic_cast<const ExecMTask*>(edgep->fromp());
+                UASSERT(depp, "Incoming edge should be ExecMTask");
+                const double deprhs = mtaskrhs[depp];
+                startPosX = (deprhs > startPosX) ? deprhs : startPosX;
+            }
+            const double rhs = startPosX + nodeWidth;
+            threadrhs[mtaskp->thread()] = rhs;
+            mtaskrhs[mtaskp] = rhs;
+        }
+        return nodeWidth / 2.0 + startPosX;
+    };
+
     for (const V3GraphVertex* vxp = m_depGraphp->verticesBeginp(); vxp;
          vxp = vxp->verticesNextp()) {
         if (const ExecMTask* mtaskp = dynamic_cast<const ExecMTask*>(vxp)) {
             const double nodeWidth = minWidth * (static_cast<double>(mtaskp->cost()) / minCost);
-            const double x
-                = (minWidth * (static_cast<double>((mtaskp->cost()) / 2.0) + mtaskp->startTime()))
-                  / minCost;
+            const double x = mtaskXPos(mtaskp, nodeWidth);
             const int y = -mtaskp->thread();
             const bool onCP
                 = std::find(m_critPath.begin(), m_critPath.end(), mtaskp) != m_critPath.end();
 
+            string color = "";
+            if (onCP) {
+                color = " color=\"red\"";
+            } else if (mtaskp->speculative() == ExecMTask::Speculative::True) {
+                color = " color=\"green\"";
+            } else if (mtaskp->speculative() == ExecMTask::Speculative::False) {
+                color = " color=\"blue\"";
+            }
+
             *logp << "  " << vxp->name() << " [label=\"" << vxp->name() << " ("
                   << mtaskp->startTime() << ":" << mtaskp->endTime() << ")"
-                  << "\"" << (onCP ? " color=\"red\"" : "") << " width=" << nodeWidth << " pos=\""
-                  << x << "," << y << "!\"]\n";
+                  << "\"" << color << " width=" << nodeWidth << " pos=\"" << x << "," << y
+                  << "!\"]\n";
         }
     }
 

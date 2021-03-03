@@ -2643,7 +2643,7 @@ void V3Partition::finalize() {
     // estimate of the AstExecGraph.
     execGraphp->updateCritPath();
 
-    execGraphp->dumpDotFilePrefixedAlways("exec_final");
+    execGraphp->dumpDotFilePrefixedAlways("exec_final", false);
     // v3Global.rootp()->dumpDotFilePrefixedAlways("exec_final");
 
     //  AstDotDumper dotDumper(v3Global.rootp());

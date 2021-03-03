@@ -9227,9 +9227,9 @@ public:
     void updateCritPath();
 
     // Debugging
-    void dumpDotFile(const string& filename) const;
-    void dumpDotFilePrefixed(const string& nameComment) const;
-    void dumpDotFilePrefixedAlways(const string& nameComment) const;
+    void dumpDotFile(const string& filename, const bool packed = true) const;
+    void dumpDotFilePrefixed(const string& nameComment, const bool packed = true) const;
+    void dumpDotFilePrefixedAlways(const string& nameComment, const bool packed = true) const;
 };
 
 class AstSplitPlaceholder final : public AstNode {
