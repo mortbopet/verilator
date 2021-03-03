@@ -349,6 +349,7 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
     auto* execGraphp = v3Global.rootp()->execGraphp();
 
     for (const auto& consmtaskp : s.cons) {
+
         // Duplicate the MTask, representing the true and false constant value of the speculation
         // variable
         auto* consmtbodyp_t = consmtaskp->bodyp()->cloneTree(false);
@@ -369,6 +370,17 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
                                         m_nextMTaskID++, ExecMTask::Speculative::False);
 
         // Create dependency edges for all incoming variables except the speculated boolean
+        // @todo: Only create edge if actual dependency (ie. avoid loops, we need topological sort)
+        for (const auto& in : m_dfgs[consmtaskp]->ins()) {
+            auto& prodmtasks = in->prodMtaskIds();
+            if (prodmtasks.size() == 0) { continue; }
+            for (int prodMTaskId : prodmtasks) {
+                ExecMTask* prodMTask = m_mtaskIdToMTask[prodMTaskId];
+
+                new V3GraphEdge(execGraphp->mutableDepGraphp(), prodMTask, consmtp_t, 1);
+                new V3GraphEdge(execGraphp->mutableDepGraphp(), prodMTask, consmtp_f, 1);
+            }
+        }
     }
 
     // Remove redundant dependency edges
