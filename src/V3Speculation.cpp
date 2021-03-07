@@ -83,45 +83,17 @@ DFG::DFG(AstMTaskBody* bodyp)
 
 void DFG::visit(AstNode* nodep) {
     if (!nodep) return;
+    auto nodeDfgp = m_nodeToDFGVp.find(nodep);
+    if (nodeDfgp == m_nodeToDFGVp.end()) {
+        nodeDfgp = m_nodeToDFGVp.insert(m_nodeToDFGVp.end(), {nodep, new DFGVertex(this, nodep)});
+    }
 
     iterateChildren(nodep);
-
-    DFGVertex* nodeDfgp = nullptr;
-
     for (auto* childp : {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
         if (childp == nullptr) continue;
-        DFGVertex* srcvtp = nullptr;
-        auto* varrefp = dynamic_cast<AstVarRef*>(childp);
-        if (varrefp &&
-            /* handled in visit(AstNodeAssign) */
-            dynamic_cast<AstNodeAssign*>(nodep) == nullptr) {
-            // Locate latest write to varref
-            if (m_varToDFGVp.count(varrefp->varp()) == 0) {
-                // First time seeing variable
-                updateVarDFGSrc(nullptr, varrefp->varp());
-            }
-            srcvtp = m_varToDFGVp.at(varrefp->varp());
-        } else {
-            if (m_nodeToDFGVp.count(nodep) == 0) {
-                m_nodeToDFGVp[nodep] = new DFGVertex(this, nodep);
-            }
-            nodeDfgp = m_nodeToDFGVp[nodep];
-            if (m_nodeToDFGVp.count(childp) == 0) {
-                m_nodeToDFGVp[childp] = new DFGVertex(this, childp);
-            }
-            srcvtp = m_nodeToDFGVp[childp];
-        }
-
-        if (varrefp) {
-            // Register the variable as an input to this MTask if the MTask has not previously
-            // written to the variable
-            auto* varp = varrefp->varp();
-            if (m_io.outs.count(varp) == 0) {
-                m_io.ins.insert(varrefp->varp());
-                varrefp->varp()->addConsumingMTaskId(m_bodyp->execMTaskp()->id());
-            }
-        }
-        if (srcvtp != nodeDfgp && nodeDfgp != nullptr) { new DFGEdge(this, srcvtp, nodeDfgp, 1); }
+        DFGVertex* srcvtp = m_nodeToDFGVp[childp];
+        UASSERT(srcvtp != nodeDfgp->second, "?");
+        new DFGEdge(this, srcvtp, nodeDfgp->second, 1);
     }
 }
 
@@ -130,9 +102,22 @@ void DFG::visit(AstVar* nodep) {
     visit(static_cast<AstNode*>(nodep));
 }
 
-void DFG::visit(AstVarRef* nodep) {
-    UASSERT(true, "");
-    visit(static_cast<AstNode*>(nodep));
+void DFG::visit(AstVarRef* varrefp) {
+    visit(static_cast<AstNode*>(varrefp));  // depth-first traversal
+
+    // Locate latest write to varref
+    if (m_varToDFGVp.count(varrefp->varp()) == 0) {
+        // First time seeing variable
+        updateVarDFGSrc(nullptr, varrefp->varp());
+    }
+
+    // Register the variable as an input to this MTask if the MTask has not previously
+    // written to the variable
+    auto* varp = varrefp->varp();
+    if (m_io.outs.count(varp) == 0) {
+        m_io.ins.insert(varrefp->varp());
+        // varrefp->varp()->addConsumingMTaskId(m_bodyp->execMTaskp()->id());
+    }
 }
 
 DFGVertex* DFG::updateVarDFGSrc(AstNode* sourcep, AstVar* varp) {
@@ -166,7 +151,7 @@ void DFG::visit(AstNodeAssign* nodep) {
     AstVar* varp = varrefp->varp();
 
     m_io.outs.insert(varp);
-    varrefp->varp()->addProducingMTaskId(m_bodyp->execMTaskp()->id());
+    // varrefp->varp()->addProducingMTaskId(m_bodyp->execMTaskp()->id());
 
     auto it = m_varToDFGVp.find(varp);
     DFGVertex* oldsrcp = nullptr;
@@ -382,11 +367,13 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
 
         // Create dependency edges for all incoming variables except the speculated boolean
         // @todo: Only create edge if actual dependency (ie. avoid loops, we need topological sort)
-        for (const auto& in : m_dfgs[consmtaskp]->ins()) {
+        for (const auto& in : m_io.at(modp).at(consmtaskp).ins) {
+            if (in == s.specVar) continue;
             auto& prodmtasks = in->prodMtaskIds();
             if (prodmtasks.size() == 0) { continue; }
             for (int prodMTaskId : prodmtasks) {
                 ExecMTask* prodMTaskp = m_mtaskIdToMTask[prodMTaskId];
+                if (prodMTaskp == consmtaskp) { continue; }
                 new V3GraphEdge(execGraphp->mutableDepGraphp(), prodMTaskp, consmtp_t, 1);
                 new V3GraphEdge(execGraphp->mutableDepGraphp(), prodMTaskp, consmtp_f, 1);
             }
@@ -403,7 +390,7 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
     for (AstNode* nodep = modp->stmtsp(); nodep; nodep = nodep->nextp()) {
         if (AstVar* varp = dynamic_cast<AstVar*>(nodep)) {
             // Reset producer/consumer IDs (updated later)
-            varp->clearMTaskIds();
+            // varp->clearMTaskIds();
             variables.push_back(varp);
         }
     }
@@ -415,7 +402,12 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
         m_nextMTaskID = m_nextMTaskID <= mtaskp->id() ? mtaskp->id() + 1 : m_nextMTaskID;
         m_dfgs[mtaskp] = new DFG(mtaskp->bodyp());
         m_mtaskIdToMTask[mtaskp->id()] = mtaskp;
+
+        AstDotDumper dump(mtaskp->bodyp());
+        dump.dumpDotFilePrefixedAlways(cvtToStr(mtaskp->id()));
     }
+
+    gatherIO(modp);
 
     // Filter the set of boolean variables which are available for speculation.
     // This helps us narrow the search for potential MTasks to speculate.
@@ -510,4 +502,28 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
 
     // New mtasks were inserted, reassure order of graph
     mtasksp->order();
+}
+
+void V3Speculation::gatherIO(AstNodeModule* modp) {
+    std::vector<AstVar*> variables;
+    for (AstNode* nodep = modp->stmtsp(); nodep; nodep = nodep->nextp()) {
+        if (AstVar* varp = dynamic_cast<AstVar*>(nodep)) {
+            // Reset producer/consumer IDs (updated later)
+            // varp->clearMTaskIds();
+            variables.push_back(varp);
+        }
+    }
+
+    for (const auto& varp : variables) {
+        for (const int consMTaskid : varp->consMtaskIds()) {
+            auto it = m_mtaskIdToMTask.find(consMTaskid);
+            if (it == m_mtaskIdToMTask.end()) continue;  // stale
+            m_io[modp][it->second].ins.insert(varp);
+        }
+        for (const int prodMTaskid : varp->prodMtaskIds()) {
+            auto it = m_mtaskIdToMTask.find(prodMTaskid);
+            if (it == m_mtaskIdToMTask.end()) continue;  // stale
+            m_io[modp][it->second].outs.insert(varp);
+        }
+    }
 }

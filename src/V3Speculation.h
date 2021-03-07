@@ -114,6 +114,11 @@ public:
     V3Speculation();
 
 private:
+    struct VarIO {
+        std::set<AstVar*> ins;
+        std::set<AstVar*> outs;
+    };
+
     /**
      * @brief The Speculateable struct
      * Maintains the set of producer/consumer MTasks which share a boolean variable, wherein the
@@ -125,6 +130,7 @@ private:
         std::vector<ExecMTask*> cons;
     };
 
+    void gatherIO(AstNodeModule* modp);
     void speculateModule(AstNodeModule* nodep);
     void doSpeculation(AstNodeModule* modp, const Speculateable& s);
 
@@ -142,6 +148,7 @@ private:
      * Maintains the in- and output variables of MTasks and CFuncs
      */
     std::unordered_map<ExecMTask*, DFG*> m_dfgs;
+    std::unordered_map<AstNodeModule*, std::unordered_map<const ExecMTask*, VarIO>> m_io;
     std::map<int, ExecMTask*> m_mtaskIdToMTask;
     unsigned m_nextMTaskID = 0;
 };
