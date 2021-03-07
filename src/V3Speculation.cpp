@@ -70,6 +70,15 @@ public:
 DFG::DFG(AstMTaskBody* bodyp)
     : m_bodyp(bodyp) {
     iterate(bodyp);
+
+    if (debug() || true) {
+        std::cout << "DFG:" << bodyp->execMTaskp()->name() + " I/O is" << endl;
+        std::cout << "\tins: ";
+        for (const auto& in : m_io.ins) { std::cout << in->origName() << ", "; }
+        std::cout << std::endl << "\touts: ";
+        for (const auto& in : m_io.ins) { std::cout << in->origName() << ", "; }
+        std::cout << std::endl;
+    }
 }
 
 void DFG::visit(AstNode* nodep) {
@@ -104,8 +113,13 @@ void DFG::visit(AstNode* nodep) {
         }
 
         if (varrefp) {
-            m_io.ins.insert(varrefp->varp());
-            varrefp->varp()->addConsumingMTaskId(m_bodyp->execMTaskp()->id());
+            // Register the variable as an input to this MTask if the MTask has not previously
+            // written to the variable
+            auto* varp = varrefp->varp();
+            if (m_io.outs.count(varp) == 0) {
+                m_io.ins.insert(varrefp->varp());
+                varrefp->varp()->addConsumingMTaskId(m_bodyp->execMTaskp()->id());
+            }
         }
         if (srcvtp != nodeDfgp && nodeDfgp != nullptr) { new DFGEdge(this, srcvtp, nodeDfgp, 1); }
     }
@@ -228,7 +242,6 @@ private:
     bool m_branch;
     AstMTaskBody* m_mtaskp;
     AstNodeModule* m_modp;
-    int m_it = 0;
 
     string nameSuffix() const { return specNameSuffix(m_branch); }
 
@@ -300,27 +313,20 @@ private:
     }
 
     void visit(AstCCall* ccallp) {
-        AstDotDumper dumper(m_mtaskp);
-        dumper.dumpDotFilePrefixedAlways("pre_ccall" + std::to_string(m_it));
-
         // Create a duplicate of the called C function, and perform boolean const propagation
         // into this function.
         const AstCFunc* origfuncp = ccallp->funcp();
-        AstCFunc* specfuncp = ccallp->funcp()->cloneTree(true);  // i think true here?
+        AstCFunc* specfuncp = ccallp->funcp()->cloneTree(false);  // i think true here?
         specfuncp->name(specfuncp->name() + nameSuffix());
         origfuncp->scopep()->addActivep(specfuncp);
+        return;
 
         // Replace the function call to the new, speculative function
         auto newFuncCall = new AstCCall(ccallp->fileline(), specfuncp, ccallp->argsp());
         ccallp->replaceWith(newFuncCall);
 
-        AstDotDumper dumper2(m_mtaskp);
-        dumper2.dumpDotFilePrefixedAlways("post_ccall" + std::to_string(m_it));
-
-        m_it++;
-
         // Iterate into the speculative function, further replacing occurances of m_varp
-        visit(specfuncp);
+        // visit(specfuncp);
     }
 
 public:
@@ -349,6 +355,9 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
     auto* execGraphp = v3Global.rootp()->execGraphp();
 
     for (const auto& consmtaskp : s.cons) {
+        m_dfgs[consmtaskp]->dumpDotFilePrefixedAlways("DFG_" + cvtToStr(consmtaskp->id()));
+        AstDotDumper dump(consmtaskp->bodyp());
+        dump.dumpDotFilePrefixedAlways(cvtToStr(consmtaskp->id()));
 
         // Duplicate the MTask, representing the true and false constant value of the speculation
         // variable
@@ -364,10 +373,12 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
         execGraphp->addMTaskBody(consmtbodyp_f);
 
         // Create ExecMTasks
-        auto* consmtp_t = new ExecMTask(execGraphp->mutableDepGraphp(), consmtbodyp_t,
-                                        m_nextMTaskID++, ExecMTask::Speculative::True);
-        auto* consmtp_f = new ExecMTask(execGraphp->mutableDepGraphp(), consmtbodyp_f,
-                                        m_nextMTaskID++, ExecMTask::Speculative::False);
+        auto* consmtp_t
+            = new ExecMTask(execGraphp->mutableDepGraphp(), consmtbodyp_t, m_nextMTaskID++);
+        consmtp_t->speculative(ExecMTask::Speculative::True, consmtaskp);
+        auto* consmtp_f
+            = new ExecMTask(execGraphp->mutableDepGraphp(), consmtbodyp_f, m_nextMTaskID++);
+        consmtp_f->speculative(ExecMTask::Speculative::False, consmtaskp);
 
         // Create dependency edges for all incoming variables except the speculated boolean
         // @todo: Only create edge if actual dependency (ie. avoid loops, we need topological sort)
@@ -375,16 +386,15 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
             auto& prodmtasks = in->prodMtaskIds();
             if (prodmtasks.size() == 0) { continue; }
             for (int prodMTaskId : prodmtasks) {
-                ExecMTask* prodMTask = m_mtaskIdToMTask[prodMTaskId];
-
-                new V3GraphEdge(execGraphp->mutableDepGraphp(), prodMTask, consmtp_t, 1);
-                new V3GraphEdge(execGraphp->mutableDepGraphp(), prodMTask, consmtp_f, 1);
+                ExecMTask* prodMTaskp = m_mtaskIdToMTask[prodMTaskId];
+                new V3GraphEdge(execGraphp->mutableDepGraphp(), prodMTaskp, consmtp_t, 1);
+                new V3GraphEdge(execGraphp->mutableDepGraphp(), prodMTaskp, consmtp_f, 1);
             }
         }
     }
 
-    // Remove redundant dependency edges
-    execGraphp->mutableDepGraphp()->removeTransitiveEdges();
+    AstDotDumper dump2(modp);
+    dump2.dumpDotFilePrefixedAlways(modp->name() + "_post_spec");
 }
 
 void V3Speculation::speculateModule(AstNodeModule* modp) {
@@ -399,7 +409,7 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
     }
 
     // Gather DFGs for each MTask. This also updates the producer/consumer info of each variable
-    const V3Graph* mtasksp = v3Global.rootp()->execGraphp()->depGraphp();
+    V3Graph* mtasksp = v3Global.rootp()->execGraphp()->mutableDepGraphp();
     for (V3GraphVertex* vxp = mtasksp->verticesBeginp(); vxp; vxp = vxp->verticesNextp()) {
         ExecMTask* mtaskp = dynamic_cast<ExecMTask*>(vxp);
         m_nextMTaskID = m_nextMTaskID <= mtaskp->id() ? mtaskp->id() + 1 : m_nextMTaskID;
@@ -424,7 +434,7 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
     // Dependency filtering
     // Filter to the set of dependencies which result as an in-evaluation dependency
     // rank(producing node) < rank(consuming node)
-    v3Global.rootp()->execGraphp()->mutableDepGraphp()->order();
+    mtasksp->order();
     std::vector<AstVar*> boolVars2;
     std::copy_if(
         boolVars1.begin(), boolVars1.end(), std::back_inserter(boolVars2),
@@ -498,5 +508,6 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
     // Go speculate!
     for (const auto& s : speculateable) { doSpeculation(modp, s.second); }
 
-    return;
+    // New mtasks were inserted, reassure order of graph
+    mtasksp->order();
 }

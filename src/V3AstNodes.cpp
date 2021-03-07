@@ -327,19 +327,18 @@ void AstExecGraph::dumpDotFile(const string& filename, const bool packed) const 
             const bool onCP
                 = std::find(m_critPath.begin(), m_critPath.end(), mtaskp) != m_critPath.end();
 
-            string color = "";
+            string label = "label=\"" + vxp->name() + " (" + cvtToStr(mtaskp->startTime()) + ":"
+                           + std::to_string(mtaskp->endTime()) + ")" + "\"";
+            string color = " ";
             if (onCP) {
-                color = " color=\"red\"";
-            } else if (mtaskp->speculative() == ExecMTask::Speculative::True) {
-                color = " color=\"green\"";
-            } else if (mtaskp->speculative() == ExecMTask::Speculative::False) {
-                color = " color=\"blue\"";
+                color += "color=\"red\"";
+            } else if (mtaskp->speculative() != ExecMTask::Speculative::None) {
+                color += mtaskp->speculative() == ExecMTask::Speculative::True ? "color=\"green\""
+                                                                               : "color=\"blue\"";
             }
 
-            *logp << "  " << vxp->name() << " [label=\"" << vxp->name() << " ("
-                  << mtaskp->startTime() << ":" << mtaskp->endTime() << ")"
-                  << "\"" << color << " width=" << nodeWidth << " pos=\"" << x << "," << y
-                  << "!\"]\n";
+            *logp << "  " << vxp->name() << " [" << label << color << " width=" << nodeWidth
+                  << " pos=\"" << x << "," << y << "!\"]\n";
         }
     }
 
@@ -356,6 +355,12 @@ void AstExecGraph::dumpDotFile(const string& filename, const bool packed) const 
                       & (std::find(m_critPath.begin(), m_critPath.end(), top) != m_critPath.end());
                 *logp << "  " << vxp->name() << " -> " << top->name()
                       << (onCP ? "[color=\"red\"]" : "") << "\n";
+            }
+
+            if (mtaskp->speculative() != ExecMTask::Speculative::None) {
+                *logp << "  " << vxp->name() << " -> " << mtaskp->specMTaskp()->name()
+                      << " [color=\"aquamarine3\" style=dashed]"
+                      << "\n";
             }
         }
     }

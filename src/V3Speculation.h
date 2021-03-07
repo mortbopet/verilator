@@ -27,7 +27,7 @@ public:
         , m_nodep(nodep) {}
     virtual ~DFGVertex() override = default;
 
-    virtual string dotName() const override { return v3Global.ptrToId(m_nodep); };
+    virtual string dotName() const override { return v3Global.ptrToId(m_nodep, false); };
     virtual string name() const override;
     virtual string dotShape() const override;
 

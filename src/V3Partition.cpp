@@ -2625,6 +2625,8 @@ void V3Partition::finalize() {
     AstExecGraph* execGraphp = v3Global.rootp()->execGraphp();
     UASSERT(execGraphp, "Couldn't find AstExecGraph singleton.");
 
+    AstDotDumper dump2(v3Global.rootp());
+    dump2.dumpDotFilePrefixedAlways("top_pre_spec");
     finalizeCosts(execGraphp->mutableDepGraphp());
     V3Speculation spec;
 
@@ -2643,6 +2645,7 @@ void V3Partition::finalize() {
     // estimate of the AstExecGraph.
     execGraphp->updateCritPath();
 
+    execGraphp->mutableDepGraphp()->dumpDotFilePrefixedAlways("dep_final");
     execGraphp->dumpDotFilePrefixedAlways("exec_final", false);
     // v3Global.rootp()->dumpDotFilePrefixedAlways("exec_final");
 
