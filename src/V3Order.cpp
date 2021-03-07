@@ -1854,7 +1854,7 @@ void OrderVisitor::processMTasks() {
                 AstVar* varp = pre_varp->varScp()->varp();
                 // varp depends on logicp, so logicp produces varp,
                 // and vice-versa below
-                varp->addProducingMTaskId(mtaskId);
+                varp->addConsumingMTaskId(mtaskId);
             }
             for (const V3GraphEdge* edgep = logicp->outBeginp(); edgep;
                  edgep = edgep->outNextp()) {
@@ -1862,7 +1862,7 @@ void OrderVisitor::processMTasks() {
                     = dynamic_cast<const OrderVarVertex*>(edgep->top());
                 if (!post_varp) continue;
                 AstVar* varp = post_varp->varScp()->varp();
-                varp->addConsumingMTaskId(mtaskId);
+                varp->addProducingMTaskId(mtaskId);
             }
             // TODO? We ignore IO vars here, so those will have empty mtask
             // signatures. But we could also give those mtask signatures.
