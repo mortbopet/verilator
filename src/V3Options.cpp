@@ -1133,6 +1133,8 @@ void V3Options::parseOptsList(FileLine* fl, const string& optdir, int argc, char
                 m_xmlOnly = flag;
             } else if (onoff(sw, "-prof-sigs", flag /*ref*/)) {
                 m_profileSigs = flag;
+            } else if (onoff(sw, "-speculate", flag /*ref*/)) {
+                m_speculate = flag;
             } else {
                 hadSwitchPart1 = false;
             }

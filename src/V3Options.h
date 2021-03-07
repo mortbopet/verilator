@@ -320,7 +320,8 @@ private:
     bool m_vpi = false;             // main switch: --vpi
     bool m_xInitialEdge = false;    // main switch: --x-initial-edge
     bool m_xmlOnly = false;         // main switch: --xml-only
-    bool m_profileSigs = false; // main switch: --prof-vars
+    bool m_profileSigs = false;     // main switch: --prof-vars
+    bool m_speculate = false;       // main switch: --speculate
 
     int         m_buildJobs = 1;    // main switch: -j
     int         m_convergeLimit = 100;  // main switch: --converge-limit
@@ -518,6 +519,7 @@ public:
     bool xInitialEdge() const { return m_xInitialEdge; }
     bool xmlOnly() const { return m_xmlOnly; }
     bool profileSigs() const { return m_profileSigs; }
+    bool speculate() const { return m_speculate; }
 
     int buildJobs() const { return m_buildJobs; }
     int convergeLimit() const { return m_convergeLimit; }

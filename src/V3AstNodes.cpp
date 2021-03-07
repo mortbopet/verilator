@@ -293,6 +293,22 @@ void AstExecGraph::dumpDotFile(const string& filename, const bool packed) const 
         }
     }
 
+    // Sort MTasks onto threads
+    std::map<int, std::vector<const ExecMTask*>> m_threadOrder;
+    for (const V3GraphVertex* vxp = m_depGraphp->verticesBeginp(); vxp;
+         vxp = vxp->verticesNextp()) {
+        if (const ExecMTask* mtaskp = dynamic_cast<const ExecMTask*>(vxp)) {
+            m_threadOrder[mtaskp->thread()].push_back(mtaskp);
+        }
+    }
+
+    for (auto& it : m_threadOrder) {
+        std::sort(it.second.begin(), it.second.end(),
+                  [](const ExecMTask* lhs, const ExecMTask* rhs) {
+                      return lhs->startTime() < rhs->startTime();
+                  });
+    }
+
     // Map of right-hand side x poisition of all MTasks in the plot
     std::map<const ExecMTask*, double> mtaskrhs;
     std::map<unsigned, double> threadrhs;
@@ -318,27 +334,51 @@ void AstExecGraph::dumpDotFile(const string& filename, const bool packed) const 
         return nodeWidth / 2.0 + startPosX;
     };
 
+    std::set<const ExecMTask*> emitted;
+    std::function<void(const ExecMTask*)> orderedEmitMTask = [&](const ExecMTask* mtaskp) {
+        if (emitted.count(mtaskp) != 0) return;
+
+        // Ensure dependency producing MTasks have been emitted
+        for (V3GraphEdge* edgep = mtaskp->inBeginp(); edgep; edgep = edgep->inNextp()) {
+            orderedEmitMTask(static_cast<const ExecMTask*>(edgep->fromp()));
+        }
+
+        // Ensure mtasks which are scheduled before this mtask this mtasks thread have been emitted
+        const auto& threadOrder = m_threadOrder[mtaskp->thread()];
+        auto threadit = std::find(threadOrder.begin(), threadOrder.end(), mtaskp);
+        if (threadit != threadOrder.begin()) {
+            threadit--;
+            if (emitted.count(*threadit) == 0) {
+                // Recurse
+                orderedEmitMTask(*threadit);
+            }
+        }
+
+        const double nodeWidth = minWidth * (static_cast<double>(mtaskp->cost()) / minCost);
+        const double x = mtaskXPos(mtaskp, nodeWidth);
+        const int y = -mtaskp->thread();
+        const bool onCP
+            = std::find(m_critPath.begin(), m_critPath.end(), mtaskp) != m_critPath.end();
+
+        string label = "label=\"" + mtaskp->name() + " (" + cvtToStr(mtaskp->startTime()) + ":"
+                       + std::to_string(mtaskp->endTime()) + ")" + "\"";
+        string color = " ";
+        if (onCP) {
+            color += "color=\"red\"";
+        } else if (mtaskp->speculative() != ExecMTask::Speculative::None) {
+            color += mtaskp->speculative() == ExecMTask::Speculative::True ? "color=\"green\""
+                                                                           : "color=\"blue\"";
+        }
+
+        *logp << "  " << mtaskp->name() << " [" << label << color << " width=" << nodeWidth
+              << " pos=\"" << x << "," << y << "!\"]\n";
+        emitted.insert(mtaskp);
+    };
+
     for (const V3GraphVertex* vxp = m_depGraphp->verticesBeginp(); vxp;
          vxp = vxp->verticesNextp()) {
         if (const ExecMTask* mtaskp = dynamic_cast<const ExecMTask*>(vxp)) {
-            const double nodeWidth = minWidth * (static_cast<double>(mtaskp->cost()) / minCost);
-            const double x = mtaskXPos(mtaskp, nodeWidth);
-            const int y = -mtaskp->thread();
-            const bool onCP
-                = std::find(m_critPath.begin(), m_critPath.end(), mtaskp) != m_critPath.end();
-
-            string label = "label=\"" + vxp->name() + " (" + cvtToStr(mtaskp->startTime()) + ":"
-                           + std::to_string(mtaskp->endTime()) + ")" + "\"";
-            string color = " ";
-            if (onCP) {
-                color += "color=\"red\"";
-            } else if (mtaskp->speculative() != ExecMTask::Speculative::None) {
-                color += mtaskp->speculative() == ExecMTask::Speculative::True ? "color=\"green\""
-                                                                               : "color=\"blue\"";
-            }
-
-            *logp << "  " << vxp->name() << " [" << label << color << " width=" << nodeWidth
-                  << " pos=\"" << x << "," << y << "!\"]\n";
+            orderedEmitMTask(mtaskp);
         }
     }
 

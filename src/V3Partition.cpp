@@ -2625,10 +2625,12 @@ void V3Partition::finalize() {
     AstExecGraph* execGraphp = v3Global.rootp()->execGraphp();
     UASSERT(execGraphp, "Couldn't find AstExecGraph singleton.");
 
-    AstDotDumper dump2(v3Global.rootp());
-    dump2.dumpDotFilePrefixedAlways("top_pre_spec");
-    finalizeCosts(execGraphp->mutableDepGraphp());
-    V3Speculation spec;
+    if (v3Global.opt.speculate()) {
+        AstDotDumper dump2(v3Global.rootp());
+        dump2.dumpDotFilePrefixedAlways("top_pre_spec");
+        finalizeCosts(execGraphp->mutableDepGraphp());
+        V3Speculation spec;
+    }
 
     // Back in V3Order, we partitioned mtasks using provisional cost
     // estimates. However, V3Order precedes some optimizations (notably
