@@ -23,64 +23,31 @@
 #include <algorithm>
 
 //######################################################################
-// Utilities
-
-class SpecVarMarkVisitor final : public AstNVisitor {
-    // NODE STATE
-    // AstVar::user4p           -> bool, Var marked, 0=not set yet
-private:
-    // VISITORS
-    virtual void visit(AstVarRef* nodep) override {
-        if (nodep->varp()) nodep->varp()->user4(1);
-    }
-    virtual void visit(AstNode* nodep) override { iterateChildren(nodep); }
-
-public:
-    // CONSTRUCTORS
-    explicit SpecVarMarkVisitor(AstNode* nodep) {
-        AstNode::user4ClearTree();  // Check marked InUse before we're called
-        iterate(nodep);
-    }
-    virtual ~SpecVarMarkVisitor() override = default;
-};
-
-class SpecVarFindVisitor final : public AstNVisitor {
-    // NODE STATE
-    // AstVar::user4p           -> bool, input from SpecVarMarkVisitor
-    // MEMBERS
-    bool m_found = false;
-
-private:
-    // VISITORS
-    virtual void visit(AstVarRef* nodep) override {
-        if (nodep->varp() && nodep->varp()->user4()) m_found = true;
-    }
-    virtual void visit(AstNode* nodep) override { iterateChildren(nodep); }
-
-public:
-    // CONSTRUCTORS
-    explicit SpecVarFindVisitor(AstNode* nodep) { iterateAndNextNull(nodep); }
-    virtual ~SpecVarFindVisitor() override = default;
-    // METHODS
-    bool found() const { return m_found; }
-};
-
-//######################################################################
 // SpeculationReplaceVisitor
 
 inline string specNameSuffix(bool branch) { return "__SPEC__" + string(branch ? "t" : "f"); }
 
 class SpeculativeReplaceVisitor final : public AstNVisitor {
 private:
+    // NODE STATE
+    // AstNode::user()  -> node was visited
+    AstUser1InUse m_inuser1;
+
     // Mapping between non-speculative to replaced speculative variable, which is being written to
     // in the partition.
-    std::unordered_map<AstVar*, AstVar*> m_specOutVars;
+    VarReplMapping m_specOutVars;
     AstVar* m_varp;  // Boolean variable to speculate on
     bool m_branch;
     AstMTaskBody* m_mtaskp;
     AstNodeModule* m_modp;
+    int it = 0;
 
     string nameSuffix() const { return specNameSuffix(m_branch); }
+
+    void dumpAST() {
+        AstDotDumper dump(m_mtaskp);
+        dump.dumpDotFilePrefixedAlways(cvtToStr(m_mtaskp->name() + "_" + cvtToStr(it++)));
+    }
 
     void replaceBool(AstNode* oldp, bool value) {
         UASSERT(oldp, "Null old");
@@ -107,7 +74,13 @@ private:
         return nullptr;
     }
 
-    void visit(AstNode* nodep) { iterateChildren(nodep); }
+    void visit(AstNode* nodep) {
+        assert(nodep->user1() == 0 && "!");
+
+        nodep->user1(1);
+        dumpAST();
+        iterateChildren(nodep);
+    }
 
     void visit(AstNodeAssign* assignp) {
         auto* varrefp = dynamic_cast<AstVarRef*>(assignp->lhsp());
@@ -150,20 +123,25 @@ private:
     }
 
     void visit(AstCCall* ccallp) {
+        if (ccallp->user1()) return;
+        ccallp->user1(1);
+
         // Create a duplicate of the called C function, and perform boolean const propagation
         // into this function.
         const AstCFunc* origfuncp = ccallp->funcp();
         AstCFunc* specfuncp = ccallp->funcp()->cloneTree(false);  // i think true here?
         specfuncp->name(specfuncp->name() + nameSuffix());
         origfuncp->scopep()->addActivep(specfuncp);
-        return;
 
         // Replace the function call to the new, speculative function
         auto newFuncCall = new AstCCall(ccallp->fileline(), specfuncp, ccallp->argsp());
         ccallp->replaceWith(newFuncCall);
+        newFuncCall->user1(1);  // prevent visitor recursion into new function call
+
+        dumpAST();
 
         // Iterate into the speculative function, further replacing occurances of m_varp
-        // visit(specfuncp);
+        visit(specfuncp);
     }
 
 public:
@@ -175,6 +153,8 @@ public:
         , m_modp(modp) {
         visit(bodyp);
     }
+
+    const VarReplMapping& specOutVars() const { return m_specOutVars; }
 };
 
 //######################################################################
@@ -201,9 +181,17 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
         auto* consmtbodyp_t = consmtaskp->bodyp()->cloneTree(false);
         auto* consmtbodyp_f = consmtaskp->bodyp()->cloneTree(false);
 
-        // Speculate into them
-        SpeculativeReplaceVisitor(modp, consmtbodyp_t, s.specVar, true);
-        SpeculativeReplaceVisitor(modp, consmtbodyp_f, s.specVar, false);
+        AstDotDumper dump3(consmtbodyp_t);
+        dump3.dumpDotFilePrefixedAlways("Truebody_copy_pre");
+
+        // Speculate into them. Manage scope of SpeculativeReplaceVisitors to ensure destruction of
+        // user pointers.
+        auto performSpeculation = [&](AstMTaskBody* mtaskbody, bool branch) {
+            SpeculativeReplaceVisitor specVisitor(modp, mtaskbody, s.specVar, branch);
+            return specVisitor.specOutVars();
+        };
+        VarReplMapping specTOutVars = performSpeculation(consmtbodyp_t, true);
+        VarReplMapping specFOutVars = performSpeculation(consmtbodyp_f, false);
 
         // Insert them into the dependency graph
         execGraphp->addMTaskBody(consmtbodyp_t);
@@ -230,10 +218,32 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
                 new V3GraphEdge(execGraphp->mutableDepGraphp(), prodMTaskp, consmtp_f, 1);
             }
         }
+
+        // Replace original MTask with speculative resolve node
+        auto* specResolvep = new AstSpecResolveBool(
+            consmtaskp->bodyp()->fileline(),
+            new AstVarRef(consmtaskp->bodyp()->fileline(), s.specVar, VAccess::READ), nullptr,
+            nullptr);
+        consmtaskp->bodyp()->stmtsp()->replaceWith(specResolvep);
+
+        // Create true and false branches for committing the speculative calculated out values
+        genCommitSpecVarStmts(specResolvep->ifsp(), specTOutVars);
+        genCommitSpecVarStmts(specResolvep->elsesp(), specFOutVars);
+        specResolvep->mtaskDepTrue(consmtp_t);
+        specResolvep->mtaskDepFalse(consmtp_f);
     }
 
     AstDotDumper dump2(modp);
     dump2.dumpDotFilePrefixedAlways(modp->name() + "_post_spec");
+}
+
+void V3Speculation::genCommitSpecVarStmts(AstNode* stmtsp, const VarReplMapping& mapping) {
+    for (const auto& it : mapping) {
+        AstNode* fromp = new AstVarRef(it.first->fileline(), it.second, VAccess::READ);
+        AstNode* top = new AstVarRef(it.first->fileline(), it.first, VAccess::WRITE);
+        AstNode* assignp = new AstAssign(it.first->fileline(), top, fromp);
+        stmtsp = AstNode::addNext(stmtsp, assignp);
+    }
 }
 
 void V3Speculation::speculateModule(AstNodeModule* modp) {

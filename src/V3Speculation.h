@@ -27,6 +27,8 @@
  * -
  */
 
+using VarReplMapping = std::unordered_map<AstVar*, AstVar*>;
+
 class V3Speculation {
 public:
     V3Speculation();
@@ -48,6 +50,7 @@ private:
         std::vector<ExecMTask*> cons;
     };
 
+    void genCommitSpecVarStmts(AstNode* stmtsp, const VarReplMapping&);
     void gatherIO(AstNodeModule* modp);
     void speculateModule(AstNodeModule* nodep);
     void doSpeculation(AstNodeModule* modp, const Speculateable& s);

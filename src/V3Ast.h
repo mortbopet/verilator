@@ -2269,6 +2269,14 @@ public:
     VBranchPred branchPred() const { return m_branchPred; }
 };
 
+class AstNodeSpecResolve VL_NOT_FINAL : public AstNodeIf {
+private:
+public:
+    AstNodeSpecResolve(AstType t, FileLine* fl, AstNode* condp, AstNode* ifsp = nullptr,
+                       AstNode* elseptr = nullptr)
+        : AstNodeIf(t, fl, condp, ifsp, elseptr) {}
+};
+
 class AstNodeCase VL_NOT_FINAL : public AstNodeStmt {
 public:
     AstNodeCase(AstType t, FileLine* fl, AstNode* exprp, AstNode* casesp)

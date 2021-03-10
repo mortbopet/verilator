@@ -4710,6 +4710,22 @@ public:
     void priorityPragma(bool flag) { m_priorityPragma = flag; }
 };
 
+class AstSpecResolveBool final : public AstNodeSpecResolve {
+private:
+    const ExecMTask* mtaskDepTruep = nullptr;
+    const ExecMTask* mtaskDepFalsep = nullptr;
+
+public:
+    AstSpecResolveBool(FileLine* fl, AstNode* condp, AstNode* ifsp, AstNode* elsesp)
+        : ASTGEN_SUPER(fl, condp, ifsp, elsesp) {}
+    ASTNODE_NODE_FUNCS(SpecResolveBool)
+
+    void mtaskDepTrue(const ExecMTask* mtaskp) { mtaskDepTruep = mtaskp; }
+    const ExecMTask* mtaskDepTrue() const { return mtaskDepTruep; }
+    void mtaskDepFalse(const ExecMTask* mtaskp) { mtaskDepFalsep = mtaskp; }
+    const ExecMTask* mtaskDepFalse() const { return mtaskDepFalsep; }
+};
+
 class AstJumpBlock final : public AstNodeStmt {
     // Block of code including a JumpGo and JumpLabel
     // Parents:  {statement list}
