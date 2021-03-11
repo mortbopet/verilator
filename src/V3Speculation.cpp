@@ -97,11 +97,12 @@ private:
             AstVar* specVarp = prevarp->cloneTree(false);
             specVarp->name(specVarp->name() + nameSuffix());
             m_modp->addStmtp(specVarp);
-            replVarp = m_specOutVars.insert(m_specOutVars.end(), {prevarp, specVarp});
+            replVarp = m_specOutVars.insert(m_specOutVars.end(),
+                                            {prevarp, VarReplInfo{assignp, varrefp, specVarp}});
         }
 
         // And replace
-        varrefp->varp(replVarp->second);
+        varrefp->varp(replVarp->second.replvarp);
 
         visit(static_cast<AstNode*>(assignp));
     }
@@ -116,7 +117,7 @@ private:
         auto it = m_specOutVars.find(varp);
         if (it != m_specOutVars.end()) {
             // Replace reference with speculative variable
-            varrefp->varp(it->second);
+            varrefp->varp(it->second.replvarp);
         }
 
         visit(static_cast<AstNode*>(varrefp));
@@ -129,16 +130,12 @@ private:
         // Create a duplicate of the called C function, and perform boolean const propagation
         // into this function.
         const AstCFunc* origfuncp = ccallp->funcp();
-        AstCFunc* specfuncp = ccallp->funcp()->cloneTree(false);  // i think true here?
+        AstCFunc* specfuncp = ccallp->funcp()->cloneTree(true);
         specfuncp->name(specfuncp->name() + nameSuffix());
         origfuncp->scopep()->addActivep(specfuncp);
 
-        // Replace the function call to the new, speculative function
-        auto newFuncCall = new AstCCall(ccallp->fileline(), specfuncp, ccallp->argsp());
-        ccallp->replaceWith(newFuncCall);
-        newFuncCall->user1(1);  // prevent visitor recursion into new function call
-
-        dumpAST();
+        // Modify target function call to the new, speculative function
+        ccallp->funcp(specfuncp);
 
         // Iterate into the speculative function, further replacing occurances of m_varp
         visit(specfuncp);
@@ -168,10 +165,26 @@ V3Speculation::V3Speculation() {
     }
 }
 
+class GatherScopeNamesVisitor final : public AstNVisitor,
+                                      public std::unordered_map<AstVar*, std::string> {
+private:
+    void visit(AstNode* nodep) { iterateChildren(nodep); }
+    void visit(AstNodeVarRef* varrefp) {
+        (*this)[varrefp->varp()] = varrefp->hiernameToProt();
+        visit(static_cast<AstNode*>(varrefp));
+    }
+    void visit(AstCCall* ccallp) { visit(ccallp->funcp()); }
+
+public:
+    GatherScopeNamesVisitor(ExecMTask* mtaskp) { iterate(mtaskp->bodyp()); }
+};
+
 void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
     auto* execGraphp = v3Global.rootp()->execGraphp();
 
     for (const auto& consmtaskp : s.cons) {
+        GatherScopeNamesVisitor scopeNames(consmtaskp);
+
         m_dfgs[consmtaskp]->dumpDotFilePrefixedAlways("DFG_" + cvtToStr(consmtaskp->id()));
         AstDotDumper dump(consmtaskp->bodyp());
         dump.dumpDotFilePrefixedAlways(cvtToStr(consmtaskp->id()));
@@ -220,30 +233,43 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
         }
 
         // Replace original MTask with speculative resolve node
-        auto* specResolvep = new AstSpecResolveBool(
-            consmtaskp->bodyp()->fileline(),
-            new AstVarRef(consmtaskp->bodyp()->fileline(), s.specVar, VAccess::READ), nullptr,
-            nullptr);
+        auto* condp = new AstVarRef(s.specVar->fileline(), s.specVar, VAccess::READ);
+        condp->hiernameToProt(scopeNames.at(s.specVar));
+
+        auto* specResolvep = new AstSpecResolveBool(consmtaskp->bodyp()->fileline(), condp,
+                                                    genCommitSpecVarStmts(specTOutVars),
+                                                    genCommitSpecVarStmts(specFOutVars));
         consmtaskp->bodyp()->stmtsp()->replaceWith(specResolvep);
 
-        // Create true and false branches for committing the speculative calculated out values
-        genCommitSpecVarStmts(specResolvep->ifsp(), specTOutVars);
-        genCommitSpecVarStmts(specResolvep->elsesp(), specFOutVars);
         specResolvep->mtaskDepTrue(consmtp_t);
         specResolvep->mtaskDepFalse(consmtp_f);
+
+        // Add dependency edges from speculative tasks to resolving task
+        new V3GraphEdge(execGraphp->mutableDepGraphp(), consmtp_t, consmtaskp, 1);
+        new V3GraphEdge(execGraphp->mutableDepGraphp(), consmtp_f, consmtaskp, 1);
     }
 
     AstDotDumper dump2(modp);
     dump2.dumpDotFilePrefixedAlways(modp->name() + "_post_spec");
 }
 
-void V3Speculation::genCommitSpecVarStmts(AstNode* stmtsp, const VarReplMapping& mapping) {
+AstNode* V3Speculation::genCommitSpecVarStmts(const VarReplMapping& mapping) {
+    AstNode* stmtsp = nullptr;
     for (const auto& it : mapping) {
-        AstNode* fromp = new AstVarRef(it.first->fileline(), it.second, VAccess::READ);
-        AstNode* top = new AstVarRef(it.first->fileline(), it.first, VAccess::WRITE);
-        AstNode* assignp = new AstAssign(it.first->fileline(), top, fromp);
+        // Base varrefs on original var reference (maintains scope, fileline info etc.)
+        auto* fromp = it.second.varrefp->cloneTree(false);
+        auto* top = it.second.varrefp->cloneTree(false);
+
+        fromp->varp(it.second.replvarp);
+        fromp->access(VAccess::READ);
+        top->varp(it.first);
+        fromp->access(VAccess::WRITE);
+
+        auto* assignp = new AstAssign(it.second.assignp->fileline(), top, fromp);
+
         stmtsp = AstNode::addNext(stmtsp, assignp);
     }
+    return stmtsp;
 }
 
 void V3Speculation::speculateModule(AstNodeModule* modp) {

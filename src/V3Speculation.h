@@ -21,13 +21,18 @@
 #include "V3Graph.h"
 #include "V3Dataflow.h"
 
-/**
- * @todo:
- * - maintain modpointer during visitor; emit speculative variables in current module
- * -
- */
+struct VarReplInfo {
+    // Maintain point of assignment for cloning assignment attributes (fileline etc.)
+    AstNodeAssign* assignp = nullptr;
 
-using VarReplMapping = std::unordered_map<AstVar*, AstVar*>;
+    // Maintain point of reference for cloning attributes (scope etc.)
+    AstVarRef* varrefp = nullptr;
+
+    // Replacement variable
+    AstVar* replvarp = nullptr;
+};
+
+using VarReplMapping = std::unordered_map<AstVar*, VarReplInfo>;
 
 class V3Speculation {
 public:
@@ -50,7 +55,7 @@ private:
         std::vector<ExecMTask*> cons;
     };
 
-    void genCommitSpecVarStmts(AstNode* stmtsp, const VarReplMapping&);
+    AstNode* genCommitSpecVarStmts(const VarReplMapping&);
     void gatherIO(AstNodeModule* modp);
     void speculateModule(AstNodeModule* nodep);
     void doSpeculation(AstNodeModule* modp, const Speculateable& s);
