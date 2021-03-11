@@ -2670,6 +2670,7 @@ public:
     virtual bool isPure() const override;
     virtual bool isOutputter() const override { return !isPure(); }
     AstCFunc* funcp() const { return m_funcp; }
+    void funcp(AstCFunc* funcp) { m_funcp = funcp; }
     string hiernameToProt() const { return m_hiernameToProt; }
     void hiernameToProt(const string& hn) { m_hiernameToProt = hn; }
     string hiernameToUnprot() const { return m_hiernameToUnprot; }
