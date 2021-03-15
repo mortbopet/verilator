@@ -213,9 +213,11 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
         auto* consmtp_t
             = new ExecMTask(execGraphp->mutableDepGraphp(), consmtbodyp_t, m_nextMTaskID++);
         consmtp_t->speculative(ExecMTask::Speculative::True, consmtaskp);
+        consmtbodyp_t->execMTaskp(consmtp_t);
         auto* consmtp_f
             = new ExecMTask(execGraphp->mutableDepGraphp(), consmtbodyp_f, m_nextMTaskID++);
         consmtp_f->speculative(ExecMTask::Speculative::False, consmtaskp);
+        consmtbodyp_f->execMTaskp(consmtp_f);
 
         // Create dependency edges for all incoming variables except the speculated boolean
         // @todo: Only create edge if actual dependency (ie. avoid loops, we need topological sort)
