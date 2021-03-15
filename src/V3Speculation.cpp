@@ -129,10 +129,9 @@ private:
 
         // Create a duplicate of the called C function, and perform boolean const propagation
         // into this function.
-        const AstCFunc* origfuncp = ccallp->funcp();
-        AstCFunc* specfuncp = ccallp->funcp()->cloneTree(true);
+        AstCFunc* specfuncp = ccallp->funcp()->cloneTree(false);
         specfuncp->name(specfuncp->name() + nameSuffix());
-        origfuncp->scopep()->addActivep(specfuncp);
+        m_modp->addStmtp(specfuncp);
 
         // Modify target function call to the new, speculative function
         ccallp->funcp(specfuncp);
