@@ -4712,18 +4712,17 @@ public:
 
 class AstSpecResolveBool final : public AstNodeSpecResolve {
 private:
-    const ExecMTask* mtaskDepTruep = nullptr;
-    const ExecMTask* mtaskDepFalsep = nullptr;
+    const ExecMTask* mtaskSpecDepp = nullptr;
 
 public:
-    AstSpecResolveBool(FileLine* fl, AstNode* condp, AstNode* ifsp, AstNode* elsesp)
-        : ASTGEN_SUPER(fl, condp, ifsp, elsesp) {}
+    AstSpecResolveBool(FileLine* fl, AstNode* condp, AstNode* ifsp, ExecMTask* mtaskp)
+        : ASTGEN_SUPER(fl, condp, ifsp, nullptr) {
+        mtaskSpecDepp = mtaskp;
+    }
     ASTNODE_NODE_FUNCS(SpecResolveBool)
 
-    void mtaskDepTrue(const ExecMTask* mtaskp) { mtaskDepTruep = mtaskp; }
-    const ExecMTask* mtaskDepTrue() const { return mtaskDepTruep; }
-    void mtaskDepFalse(const ExecMTask* mtaskp) { mtaskDepFalsep = mtaskp; }
-    const ExecMTask* mtaskDepFalse() const { return mtaskDepFalsep; }
+    void mtaskSpecDep(const ExecMTask* mtaskp) { mtaskSpecDepp = mtaskp; }
+    const ExecMTask* mtaskSpecDep() const { return mtaskSpecDepp; }
 };
 
 class AstJumpBlock final : public AstNodeStmt {

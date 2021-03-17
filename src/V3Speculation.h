@@ -52,11 +52,11 @@ private:
     struct Speculateable {
         AstVar* specVar = nullptr;
         ExecMTask* prod = nullptr;
-        std::vector<ExecMTask*> cons;
+        ExecMTask* cons = nullptr;
     };
 
     AstNode* genCommitSpecVarStmts(const VarReplMapping&);
-    void gatherIO(AstNodeModule* modp);
+    void updateDataflowInfo(AstNodeModule* modp);
     void speculateModule(AstNodeModule* nodep);
     void doSpeculation(AstNodeModule* modp, const Speculateable& s);
 
@@ -75,6 +75,7 @@ private:
      */
     std::unordered_map<ExecMTask*, DFG*> m_dfgs;
     std::unordered_map<AstNodeModule*, std::unordered_map<const ExecMTask*, VarIO>> m_io;
+    std::map<AstVar*, ExecMTask*> m_varProducedBy;
     std::map<int, ExecMTask*> m_mtaskIdToMTask;
     unsigned m_nextMTaskID = 0;
 };

@@ -74,7 +74,7 @@ void DFG::visit(AstVarRef* varrefp) {
     auto* varp = varrefp->varp();
     if (m_io.outs.count(varp) == 0) {
         m_io.ins.insert(varrefp->varp());
-        // varrefp->varp()->addConsumingMTaskId(m_bodyp->execMTaskp()->id());
+        varrefp->varp()->addConsumingMTaskId(m_bodyp->execMTaskp()->id());
     }
 }
 
@@ -109,7 +109,7 @@ void DFG::visit(AstNodeAssign* nodep) {
     AstVar* varp = varrefp->varp();
 
     m_io.outs.insert(varp);
-    // varrefp->varp()->addProducingMTaskId(m_bodyp->execMTaskp()->id());
+    varrefp->varp()->addProducingMTaskId(m_bodyp->execMTaskp()->id());
 
     auto it = m_varToDFGVp.find(varp);
     DFGVertex* oldsrcp = nullptr;

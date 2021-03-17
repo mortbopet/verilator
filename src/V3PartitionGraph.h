@@ -54,7 +54,7 @@ public:
 
 class ExecMTask final : public AbstractMTask {
 public:
-    enum Speculative { None, True, False };
+    enum class Speculative { None, True, False };
 
 private:
     AstMTaskBody* m_bodyp;  // Task body
@@ -76,6 +76,9 @@ private:
     bool m_threadRoot = false;  // Is root thread
     Speculative m_spec = Speculative::None;  // is speculative
     const ExecMTask* m_specMTaskp = nullptr;  // Mtask that this mtask speculates
+    ExecMTask* m_partnerSpecMTaskp
+        = nullptr;  // Partner speculative MTask. Ie. if this MTask is the true branch of a
+                    // speculation, this pointer will point to the 'false' branch mtask.
     VL_UNCOPYABLE(ExecMTask);
 
     string specSuffix() const {
@@ -91,10 +94,12 @@ public:
         : AbstractMTask{graphp}
         , m_bodyp{bodyp}
         , m_id{id} {}
-    void speculative(Speculative spec, const ExecMTask* mtaskp) {
+    void speculative(Speculative spec, const ExecMTask* mtaskp, ExecMTask* partnerSpecMTaskp) {
         m_spec = spec;
         m_specMTaskp = mtaskp;
+        m_partnerSpecMTaskp = partnerSpecMTaskp;
     }
+    const ExecMTask* partnerSpecMTaskp() const { return m_partnerSpecMTaskp; }
     Speculative speculative() const { return m_spec; }
     const ExecMTask* specMTaskp() const { return m_specMTaskp; }
     AstMTaskBody* bodyp() const { return m_bodyp; }
