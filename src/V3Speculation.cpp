@@ -19,6 +19,7 @@
 #include "V3PartitionGraph.h"
 #include "V3AstDot.h"
 #include "V3Dataflow.h"
+#include "V3Const.h"
 
 #include <algorithm>
 
@@ -214,8 +215,8 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
         = new ExecMTask(execGraphp->mutableDepGraphp(), consmtbodyp_t, m_nextMTaskID++);
     auto* consmtp_f
         = new ExecMTask(execGraphp->mutableDepGraphp(), consmtbodyp_f, m_nextMTaskID++);
-    consmtp_t->speculative(ExecMTask::Speculative::True, s.cons, consmtp_f);
-    consmtp_f->speculative(ExecMTask::Speculative::False, s.cons, consmtp_t);
+    consmtp_t->speculative(ExecMTask::Speculative::True, s.cons->id(), consmtp_f);
+    consmtp_f->speculative(ExecMTask::Speculative::False, s.cons->id(), consmtp_t);
     consmtbodyp_t->execMTaskp(consmtp_t);
     consmtbodyp_f->execMTaskp(consmtp_f);
 
@@ -229,11 +230,19 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
         if (invarp->varType() == AstVarType::PORT) continue;
 
         ExecMTask* prodMTaskp = m_varProducedBy.at(invarp);
-        if (prodMTaskp == s.cons) { continue; }
-        assert(prodMTaskp != consmtp_t);
-        new V3GraphEdge(execGraphp->mutableDepGraphp(), prodMTaskp, consmtp_t, 1);
-        assert(prodMTaskp != consmtp_f);
-        new V3GraphEdge(execGraphp->mutableDepGraphp(), prodMTaskp, consmtp_f, 1);
+        std::vector<ExecMTask*> inEdges = {prodMTaskp};
+        if (prodMTaskp->partnerSpecMTaskp() != nullptr) {
+            // Also depend on the other speculative branch
+            inEdges.push_back(prodMTaskp->partnerSpecMTaskp());
+        }
+
+        for (auto* prodp : inEdges) {
+            if (prodp == s.cons) { continue; }
+            assert(prodp != consmtp_t);
+            new V3GraphEdge(execGraphp->mutableDepGraphp(), prodp, consmtp_t, 1);
+            assert(prodp != consmtp_f);
+            new V3GraphEdge(execGraphp->mutableDepGraphp(), prodp, consmtp_f, 1);
+        }
     }
 
     // Add speculative resolution statements to end of speculative bodies
@@ -373,6 +382,9 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
 
     // Go speculate!
     for (const auto& s : speculateable) { doSpeculation(modp, s.second.at(0)); }
+
+    // Run constant propagation to clean up speculate partitions
+    V3Const::constifyAll(v3Global.rootp());
 
     // New mtasks were inserted, reassure order of graph
     mtasksp->order();
