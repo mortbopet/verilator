@@ -396,12 +396,6 @@ void AstExecGraph::dumpDotFile(const string& filename, const bool packed) const 
                 *logp << "  " << vxp->name() << " -> " << top->name()
                       << (onCP ? "[color=\"red\"]" : "") << "\n";
             }
-
-            if (mtaskp->speculative() != ExecMTask::Speculative::None) {
-                *logp << "  " << vxp->name() << " -> " << mtaskp->specMTaskp()->name()
-                      << " [color=\"aquamarine3\" style=dashed]"
-                      << "\n";
-            }
         }
     }
 

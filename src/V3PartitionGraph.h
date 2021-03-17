@@ -75,7 +75,8 @@ private:
     const ExecMTask* m_packNextp = nullptr;  // Next for static (pack_mtasks) scheduling
     bool m_threadRoot = false;  // Is root thread
     Speculative m_spec = Speculative::None;  // is speculative
-    const ExecMTask* m_specMTaskp = nullptr;  // Mtask that this mtask speculates
+    unsigned m_speculatesMtaskId = -1;  // ID of original Mtask that this mtask speculates (we
+                                        // don't keep a pointer since the MTask will be removed)
     ExecMTask* m_partnerSpecMTaskp
         = nullptr;  // Partner speculative MTask. Ie. if this MTask is the true branch of a
                     // speculation, this pointer will point to the 'false' branch mtask.
@@ -84,8 +85,8 @@ private:
     string specSuffix() const {
         switch (m_spec) {
         case Speculative::None: return "";
-        case Speculative::True: return "__SPEC__t_" + cvtToStr(m_specMTaskp->id());
-        case Speculative::False: return "__SPEC__f_" + cvtToStr(m_specMTaskp->id());
+        case Speculative::True: return "__SPEC__t_" + cvtToStr(m_speculatesMtaskId);
+        case Speculative::False: return "__SPEC__f_" + cvtToStr(m_speculatesMtaskId);
         }
     }
 
@@ -94,14 +95,14 @@ public:
         : AbstractMTask{graphp}
         , m_bodyp{bodyp}
         , m_id{id} {}
-    void speculative(Speculative spec, const ExecMTask* mtaskp, ExecMTask* partnerSpecMTaskp) {
+    void speculative(Speculative spec, unsigned speculatesMtaskId, ExecMTask* partnerSpecMTaskp) {
         m_spec = spec;
-        m_specMTaskp = mtaskp;
+        m_speculatesMtaskId = speculatesMtaskId;
         m_partnerSpecMTaskp = partnerSpecMTaskp;
     }
-    const ExecMTask* partnerSpecMTaskp() const { return m_partnerSpecMTaskp; }
+    ExecMTask* partnerSpecMTaskp() const { return m_partnerSpecMTaskp; }
     Speculative speculative() const { return m_spec; }
-    const ExecMTask* specMTaskp() const { return m_specMTaskp; }
+    unsigned specMTaskId() const { return m_speculatesMtaskId; }
     AstMTaskBody* bodyp() const { return m_bodyp; }
     virtual uint32_t id() const override { return m_id; }
     uint32_t priority() const { return m_priority; }
