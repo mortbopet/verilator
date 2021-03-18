@@ -2271,10 +2271,19 @@ public:
 
 class AstNodeSpecResolve VL_NOT_FINAL : public AstNodeIf {
 private:
+    /**
+     * Maintain the MTask that this speculative node resides in.
+     * This is done to make C emission a bit simpler, for detecting cross-thread dependencies when
+     * the AST is being traversed.
+     */
+    ExecMTask* m_thisMTaskp = nullptr;
+
 public:
-    AstNodeSpecResolve(AstType t, FileLine* fl, AstNode* condp, AstNode* ifsp = nullptr,
-                       AstNode* elseptr = nullptr)
-        : AstNodeIf(t, fl, condp, ifsp, elseptr) {}
+    AstNodeSpecResolve(AstType t, FileLine* fl, ExecMTask* thisMTaskp, AstNode* condp,
+                       AstNode* ifsp = nullptr, AstNode* elseptr = nullptr)
+        : AstNodeIf(t, fl, condp, ifsp, elseptr)
+        , m_thisMTaskp(thisMTaskp) {}
+    ExecMTask* thisMTask() const { return m_thisMTaskp; }
 };
 
 class AstNodeCase VL_NOT_FINAL : public AstNodeStmt {

@@ -77,6 +77,11 @@ private:
     Speculative m_spec = Speculative::None;  // is speculative
     unsigned m_speculatesMtaskId = -1;  // ID of original Mtask that this mtask speculates (we
                                         // don't keep a pointer since the MTask will be removed)
+
+    // If this MTask produces a variable which is speculated upon by other mtasks, these
+    // speculative mtasks are maintained in the following set.
+    std::set<ExecMTask*> m_downstreamSpecMTasks;
+
     ExecMTask* m_partnerSpecMTaskp
         = nullptr;  // Partner speculative MTask. Ie. if this MTask is the true branch of a
                     // speculation, this pointer will point to the 'false' branch mtask.
@@ -99,6 +104,10 @@ public:
         m_spec = spec;
         m_speculatesMtaskId = speculatesMtaskId;
         m_partnerSpecMTaskp = partnerSpecMTaskp;
+    }
+    void addDownstreamSpeculativeTask(ExecMTask* mtaskp) { m_downstreamSpecMTasks.insert(mtaskp); }
+    const std::set<ExecMTask*>& downstreamSpeculativeMTasks() const {
+        return m_downstreamSpecMTasks;
     }
     ExecMTask* partnerSpecMTaskp() const { return m_partnerSpecMTaskp; }
     Speculative speculative() const { return m_spec; }

@@ -26,9 +26,11 @@ VL_THREAD_LOCAL VlThreadPool::ProfileTrace* VlThreadPool::t_profilep = nullptr;
 //=============================================================================
 // VlMTaskVertex
 
-VlMTaskVertex::VlMTaskVertex(vluint32_t upstreamDepCount)
+VlMTaskVertex::VlMTaskVertex(vluint32_t upstreamDepCount, vluint32_t upstreamSpecDepCount)
     : m_upstreamDepsDone{0}
-    , m_upstreamDepCount{upstreamDepCount} {
+    , m_upstreamDepCount{upstreamDepCount}
+    , m_upstreamSpecDepsDone{0}
+    , m_upstreamSpecDepCount{upstreamSpecDepCount} {
     assert(atomic_is_lock_free(&m_upstreamDepsDone));
 }
 

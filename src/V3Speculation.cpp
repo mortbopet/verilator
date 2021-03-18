@@ -235,9 +235,7 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
             // Also depend on the other speculative branch
             inEdges.push_back(prodMTaskp->partnerSpecMTaskp());
         }
-
         for (auto* prodp : inEdges) {
-            if (prodp == s.cons) { continue; }
             assert(prodp != consmtp_t);
             new V3GraphEdge(execGraphp->mutableDepGraphp(), prodp, consmtp_t, 1);
             assert(prodp != consmtp_f);
@@ -248,14 +246,14 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
     // Add speculative resolution statements to end of speculative bodies
     auto* condp_t = new AstVarRef(s.specVar->fileline(), s.specVar, VAccess::READ);
     condp_t->hiernameToProt(scopeNames.at(s.specVar));
-    consmtbodyp_t->addStmtsp(new AstSpecResolveBool(s.cons->bodyp()->fileline(), condp_t,
-                                                    genCommitSpecVarStmts(specTOutVars), s.prod));
+    consmtbodyp_t->addStmtsp(new AstSpecResolveBool(s.cons->bodyp()->fileline(), consmtp_t,
+                                                    condp_t, genCommitSpecVarStmts(specTOutVars)));
 
     auto* condp_f = new AstVarRef(s.specVar->fileline(), s.specVar, VAccess::READ);
     condp_f->hiernameToProt(scopeNames.at(s.specVar));
-    consmtbodyp_f->addStmtsp(new AstSpecResolveBool(s.cons->bodyp()->fileline(),
+    consmtbodyp_f->addStmtsp(new AstSpecResolveBool(s.cons->bodyp()->fileline(), consmtp_f,
                                                     new AstNot(condp_f->fileline(), condp_f),
-                                                    genCommitSpecVarStmts(specFOutVars), s.prod));
+                                                    genCommitSpecVarStmts(specFOutVars)));
 
     // The speculated mtasks should inherit the outgoing edges from their origin MTask
     for (V3GraphEdge* edgep = s.cons->outBeginp(); edgep; edgep = edgep->outNextp()) {
