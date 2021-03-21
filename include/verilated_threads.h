@@ -74,7 +74,7 @@ class VlMTaskVertex final {
     // use 16-bit types here...)
     std::atomic<vluint32_t> m_upstreamDepsDone;
     const vluint32_t m_upstreamDepCount;
-    std::atomic<vluint32_t> m_upstreamSpecDone;
+    std::atomic<vluint32_t> m_upstreamSpecDepsDone;
     const vluint32_t m_upstreamSpecDepCount;
 
 public:
@@ -127,12 +127,12 @@ public:
     inline bool signalUpstreamSpecDone(bool evenCycle) {
         if (evenCycle) {
             vluint32_t upstreamDepsDone
-                = 1 + m_upstreamSpecDone.fetch_add(1, std::memory_order_release);
+                = 1 + m_upstreamSpecDepsDone.fetch_add(1, std::memory_order_release);
             assert(upstreamDepsDone <= m_upstreamDepCount);
             return (upstreamDepsDone == m_upstreamDepCount);
         } else {
             vluint32_t upstreamDepsDone_prev
-                = m_upstreamSpecDone.fetch_sub(1, std::memory_order_release);
+                = m_upstreamSpecDepsDone.fetch_sub(1, std::memory_order_release);
             assert(upstreamDepsDone_prev > 0);
             return (upstreamDepsDone_prev == 1);
         }
@@ -140,7 +140,7 @@ public:
 
     inline bool areUpstreamSpecDepsDone(bool evenCycle) const {
         vluint32_t target = evenCycle ? m_upstreamSpecDepCount : 0;
-        return m_upstreamSpecDone.load(std::memory_order_acquire) == target;
+        return m_upstreamSpecDepsDone.load(std::memory_order_acquire) == target;
     }
 
     inline void waitUntilUpstreamSpecDone(bool evenCycle) const {

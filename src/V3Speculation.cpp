@@ -220,6 +220,8 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
     consmtbodyp_t->execMTaskp(consmtp_t);
     consmtbodyp_f->execMTaskp(consmtp_f);
 
+    s.prod->addDownstreamSpeculativeTask(consmtp_t);
+    s.prod->addDownstreamSpeculativeTask(consmtp_f);
     // Create dependency edges for all incoming variables except the speculated boolean. We cannot
     // use the dependency graph here, due to transitive edge removal, and by the fact that the only
     // remaining dependency edge in the graph is the actual boolean which we are currently
