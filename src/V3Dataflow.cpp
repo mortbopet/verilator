@@ -32,9 +32,9 @@ DFG::DFG(AstMTaskBody* bodyp)
     if (debug() || true) {
         std::cout << "DFG:" << bodyp->execMTaskp()->name() + " I/O is" << endl;
         std::cout << "\tins: ";
-        for (const auto& in : m_io.ins) { std::cout << in->origName() << ", "; }
+        for (const auto& in : m_io.ins) { std::cout << in->nameProtect() << ", "; }
         std::cout << std::endl << "\touts: ";
-        for (const auto& in : m_io.ins) { std::cout << in->origName() << ", "; }
+        for (const auto& out : m_io.outs) { std::cout << out->nameProtect() << ", "; }
         std::cout << std::endl;
     }
 }
@@ -98,10 +98,6 @@ DFGVertex* DFG::updateVarDFGSrc(AstNode* sourcep, AstVar* varp) {
 }
 
 void DFG::visit(AstNodeAssign* nodep) {
-    // Ensure depth-first traversal before updating the variable assignment node. As a reminder,
-    // generating the DFG from the AST is in general inverting edge directions of the AST dag.
-    visit(static_cast<AstNode*>(nodep));
-
     AstNodeVarRef* varrefp = dynamic_cast<AstNodeVarRef*>(nodep->lhsp());
     if (varrefp == nullptr) { return; }
     UASSERT(varrefp, "Assignment to non-variable?");
@@ -110,6 +106,10 @@ void DFG::visit(AstNodeAssign* nodep) {
 
     m_io.outs.insert(varp);
     varrefp->varp()->addProducingMTaskId(m_bodyp->execMTaskp()->id());
+
+    // Ensure depth-first traversal before updating the variable assignment node. As a reminder,
+    // generating the DFG from the AST is in general inverting edge directions of the AST dag.
+    visit(static_cast<AstNode*>(nodep));
 
     auto it = m_varToDFGVp.find(varp);
     DFGVertex* oldsrcp = nullptr;
