@@ -12,8 +12,8 @@ class T_longcond(depth : Int) extends Module {
     val out = Output(UInt(32.W))
   })
 
-  val COND_COMPLEXITY = 10 // defines the computation size of the comparison value
-  val COMP_COMPLEXITY = 10 // defines the computation size of the computation value
+  val COND_COMPLEXITY = 20 // defines the computation size of the comparison value
+  val COMP_COMPLEXITY = 20 // defines the computation size of the computation value
 
   val regs = Reg(Vec(nFuncUnits, (UInt(32.W))))
   val adders = Wire(Vec(nFuncUnits, UInt(32.W)))
@@ -28,10 +28,10 @@ class T_longcond(depth : Int) extends Module {
   for(i <- 0 until nFuncUnits) {
     val preIdx = (i-1)/2 
     val op1 = if (i == 0) io.in1 else adders(preIdx)
-    adders(i) := Mux(addCond(i), op1 + regs(i), regs(i) * 2.U)
+    adders(i) := Mux(addCond(i), heavyComp(op1, io.in2, regs(i), COMP_COMPLEXITY), heavyComp(regs(i) * 2.U, op1, io.in2, COMP_COMPLEXITY))
   }
 
-  private def heavyBooleanComp(i: UInt, j: UInt, k: UInt) : Bool = {
+  private def heavyComp(i: UInt, j: UInt, k: UInt, complexity: Int) : UInt = {
     def compStuff(b: UInt, c: UInt, d: UInt, round: Int) : UInt = {
       round % 4 match {
         case 0 => (b & c) | (~b & d)
@@ -40,8 +40,11 @@ class T_longcond(depth : Int) extends Module {
         case 3 => c ^ (b | ~d)
       }
     }
+    (0 until complexity).foldLeft(i){case (acc, i) => compStuff(acc, j, k, i)}
+  }
 
-    (0 until COND_COMPLEXITY).foldLeft(i){case (acc, i) => compStuff(acc, j, k, i)} === 42.U
+  private def heavyBooleanComp(i: UInt, j: UInt, k: UInt) : Bool = {
+    heavyComp(i, j, k, COND_COMPLEXITY) === 42.U
   }
 
   // private def heavyCombComp()
@@ -49,5 +52,5 @@ class T_longcond(depth : Int) extends Module {
 
 
 object T_longcond extends App {
-  (new chisel3.stage.ChiselStage).emitVerilog(new T_longcond(2))
+  (new chisel3.stage.ChiselStage).emitVerilog(new T_longcond(3))
 }
