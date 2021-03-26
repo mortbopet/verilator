@@ -41,10 +41,6 @@ struct CondSpeculateable {
     AstVar* dummyVar = nullptr;
     // Old cond expression, that is reemitted during speculative commit
     AstNode* condExpr = nullptr;
-
-    // Set of variables that is referenced within the conditional expression (which are
-    // speculative)
-    std::set<AstVar*> specVars;
 };
 
 /**
@@ -53,6 +49,10 @@ struct CondSpeculateable {
  * relationship has been determined to be speculateable.
  */
 struct Speculateable {
+    // Set of variables that is referenced within this speculation (which, in turn, are
+    // speculative and must be tracked)
+    std::set<AstVar*> specVars;
+
     // A boolean variable that is speculative
     AstVar* specBoolVar = nullptr;
     CondSpeculateable condSpec;

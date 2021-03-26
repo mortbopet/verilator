@@ -38,7 +38,8 @@ inline void replaceBool(AstNode* oldp, bool value) {
 
 inline AstVar* replaceVar(AstNode* oldp, string prefix) {
     UASSERT(oldp, "Null old");
-    AstVar* dummyvar = new AstVar(nullptr, AstVarType::BLOCKTEMP, prefix, VFlagLogicPacked(), 0);
+    AstVar* dummyvar
+        = new AstVar(oldp->fileline(), AstVarType::BLOCKTEMP, prefix, VFlagLogicPacked(), 0);
     AstNode* newp = new AstVarRef(oldp->fileline(), dummyvar, VAccess::READ);
     newp->dtypeFrom(oldp);
     oldp->replaceWith(newp);
@@ -57,8 +58,10 @@ public:
 
     void checkCondp(AstNode* nodep, AstNode* condp) {
         if (nodep == m_s.condSpec.brExpr) {
-            // First we clone the conditional expression whereafter it is replaced with a dummy
-            // variable.
+            // First we clone the conditional expression whereafter it is replaced with a reference
+            // to a dummy variable. This is quite redundant, but it gives us a way to track the
+            // location of the selected conditional expression, after we clone the tree. We can't
+            // use user pointers (not cloned, not allowed by Verilator).
             m_oldCondExpr = condp->cloneTree(false);
             m_dummyVar = replaceVar(condp, "__SPEC__cond_dummy");
         } else {
@@ -89,11 +92,15 @@ private:
     // Mapping between non-speculative to replaced speculative variable, which is being written to
     // in the partition.
     VarReplMapping m_specOutVars;
-    const Speculateable& m_s;  // variables/expressions to replace
+    Speculateable& m_s;  // variables/expressions to replace
     bool m_branch;
     AstMTaskBody* m_mtaskp;
     AstNodeModule* m_modp;
     int it = 0;
+
+    // Maintain set of replaced functions. When deleting the speculated mtasks' tree, we are not
+    // deleting the functions that we've replaced as well, so we have to track them separately.
+    std::set<AstCFunc*> m_replacedFunctions;
 
     string nameSuffix() const { return specNameSuffix(m_branch); }
 
@@ -129,7 +136,9 @@ private:
         auto* varrefp = dynamic_cast<AstVarRef*>(assignp->lhsp());
         UASSERT(varrefp, "Assignment to non-variable?");
         AstVar* prevarp = varrefp->varp();
-        UASSERT(prevarp != m_s.specBoolVar, "Assignment to variable we speculate on?");
+        if (m_s.specBoolVar) {
+            UASSERT(prevarp != m_s.specBoolVar, "Assignment to variable we speculate on?");
+        }
 
         assignp->dump(cout);
         cout << endl;
@@ -151,6 +160,7 @@ private:
     }
 
     bool isSpeculatedCondExpr(AstNode* nodep) const {
+        if (m_s.condSpec.dummyVar == nullptr) { return false; }
         if (auto* varrefp = dynamic_cast<AstVarRef*>(nodep)) {
             return varrefp->varp() == m_s.condSpec.dummyVar;
         }
@@ -162,12 +172,12 @@ private:
     void handleBranch(AstNode* parent, AstNode* condp, AstNode* thenp, AstNode* elsep) {
         if (isSpeculatedCondExpr(condp)) {
             // Exchange parent with the branch corresponding to m_branch
-            parent->replaceWith(m_branch ? thenp : elsep);
+            parent->replaceWith(m_branch ? thenp->cloneTree(false) : elsep->cloneTree(false));
             VL_DO_DANGLING(parent->deleteTree(), parent);
         } else {
-            visit(condp);
-            visit(thenp);
-            visit(elsep);
+            if (condp) visit(condp);
+            if (thenp) visit(thenp);
+            if (elsep) visit(elsep);
         }
     }
 
@@ -183,7 +193,7 @@ private:
         AstVar* varp = varrefp->varp();
 
         // Only replace when we are not replacing a conditional expression
-        if (varp == m_s.specBoolVar) {
+        if (m_s.specBoolVar && varp == m_s.specBoolVar) {
             replaceBool(varrefp, m_branch);
             return;
         }
@@ -203,6 +213,7 @@ private:
 
         // Create a duplicate of the called C function, and perform boolean const propagation
         // into this function.
+        m_replacedFunctions.insert(ccallp->funcp());
         AstCFunc* specfuncp = ccallp->funcp()->cloneTree(false);
         specfuncp->name(specfuncp->name() + nameSuffix());
         m_modp->addStmtp(specfuncp);
@@ -216,8 +227,8 @@ private:
     }
 
 public:
-    explicit SpeculativeReplaceVisitor(AstNodeModule* modp, AstMTaskBody* bodyp,
-                                       const Speculateable& s, bool branch)
+    explicit SpeculativeReplaceVisitor(AstNodeModule* modp, AstMTaskBody* bodyp, Speculateable& s,
+                                       bool branch)
         : m_s(s)
         , m_branch(branch)
         , m_mtaskp(bodyp)
@@ -226,6 +237,7 @@ public:
     }
 
     const VarReplMapping& specOutVars() const { return m_specOutVars; }
+    const std::set<AstCFunc*>& replacedFunctions() const { return m_replacedFunctions; }
 };
 
 class GatherScopeNamesVisitor final : public AstNVisitor,
@@ -294,6 +306,9 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, Speculateable s) {
     auto* execGraphp = v3Global.rootp()->execGraphp();
     updateDataflowInfo(modp);
 
+    assert(static_cast<bool>(s.specBoolVar) ^ static_cast<bool>(s.condSpec.brExpr)
+           && "A speculation must be either boolean speculation or conditional speculation");
+
     GatherScopeNamesVisitor scopeNames(s.cons);
     string scopeName;
     if (s.specBoolVar) { scopeName = scopeNames.at(s.specBoolVar); }
@@ -302,16 +317,12 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, Speculateable s) {
     // Before duplicating MTask, perform replacement of conditional expression. This method will
     // replace the conditional expr with a temporary variable. This variable will then be replaced
     // by SpeculativeReplaceVisitor.
-    if (s.condSpec.condExpr) {
+    if (s.isCondSpec()) {
         SpecCondExprReplaceVisitor specExprVisitor(s.cons->bodyp(), s);
         s.condSpec.dummyVar = specExprVisitor.dummyVar();
         s.condSpec.condExpr = specExprVisitor.condExpr();
+        assert(s.condSpec.condExpr && s.condSpec.dummyVar);
     }
-
-    assert(false
-           && "Now we have a possible different variable to replace than what is in s.specVars. "
-              "We need to be able to dinstinguish between the upstream spec vars (which are real) "
-              "and the speculated vars (which may be dummies");
 
     // Duplicate the MTask, representing the true and false constant value of the speculation
     // variable
@@ -320,8 +331,12 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, Speculateable s) {
 
     // Speculate into them. Manage scope of SpeculativeReplaceVisitors to ensure destruction of
     // user pointers.
+    std::set<AstCFunc*> replacedFunctions;
     auto performSpeculation = [&](AstMTaskBody* mtaskbody, bool branch) {
         SpeculativeReplaceVisitor specVisitor(modp, mtaskbody, s, branch);
+        replacedFunctions.insert(specVisitor.replacedFunctions().begin(),
+                                 specVisitor.replacedFunctions().end());
+
         return specVisitor.specOutVars();
     };
     VarReplMapping specTOutVars = performSpeculation(consmtbodyp_t, true);
@@ -358,7 +373,7 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, Speculateable s) {
     // speculating on.
     // @todo: Only create edge if actual dependency (ie. avoid loops, we need topological sort)
     for (const auto& invarp : m_io.at(modp).at(s.cons).ins) {
-        if (invarp == s.specBoolVar) continue;
+        if (s.specVars.count(invarp) != 0) continue;
         if (invarp->varType() == AstVarType::PORT) continue;
 
         auto prodMTaskp = m_varProducedBy.find(invarp);
@@ -390,9 +405,10 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, Speculateable s) {
         new V3GraphEdge(execGraphp->mutableDepGraphp(), consmtp_f, edgep->top(), 1);
     }
 
-    // Finally, delete the original MTask
+    // Finally, delete the original MTask and its speculated functions
     s.cons->bodyp()->unlinkFrBack()->deleteTree(), s.cons->bodyp();
     s.cons->unlinkDelete(execGraphp->mutableDepGraphp());
+    for (auto& specFunc : replacedFunctions) { specFunc->unlinkFrBack()->deleteTree(); }
 
     AstDotDumper dump2(modp);
     dump2.dumpDotFilePrefixedAlways(modp->name() + "ast_post_spec");
@@ -406,6 +422,10 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, Speculateable s) {
 // Due to transitive edges, the consuming MTask can inherit the incoming dependencies of
 // the producing mtask through speculation.
 bool V3Speculation::isCriticalVariable(AstVar* varp, ExecMTask* consp) {
+    // If variable is available at evaluation time (ie. register/sync. input), it can never be a
+    // dritical variable. This is shown by the lack of producing MTasks.
+    if (varp->prodMtaskIds().empty()) { return false; }
+
     ExecMTask* prodp = m_mtaskIdToMTask.at(*varp->prodMtaskIds().begin());
 
     // Locate MTasks which depend on this variable:
@@ -518,7 +538,7 @@ void V3Speculation::gatherBoolVarSpecs(AstNodeModule* modp, Speculateables& spec
                 s.prod = prodp;
                 s.cons = consp;
                 s.specBoolVar = varp;
-                s.condSpec.condExpr = nullptr;
+                s.specVars.insert(varp);
                 speculateable[s.cons].push_back(s);
             }
         }
@@ -530,7 +550,7 @@ private:
     struct Candidate {
         // Set of variables contained within the possibly speculative conditional
         std::set<AstVar*> specVars;
-        AstNode* condExpr = nullptr;
+        AstNode* brExpr = nullptr;
     };
 
     // A stack of the current candidates that we are traversing
@@ -563,11 +583,11 @@ public:
         m_candidates.emplace_back();
         auto* newCandidate = &(*m_candidates.rbegin());
         inCandidateStack.push_back(newCandidate);
-        newCandidate->condExpr = nodep;
+        newCandidate->brExpr = nodep;
         visit(static_cast<AstNode*>(ifp));
         inCandidateStack.pop_back();
-        visit(static_cast<AstNode*>(thenp));
-        visit(static_cast<AstNode*>(elsep));
+        if (thenp) visit(static_cast<AstNode*>(thenp));
+        if (elsep) visit(static_cast<AstNode*>(elsep));
     }
 
     void visit(AstNodeCond* nodep) {
@@ -587,8 +607,8 @@ public:
         // Determine the conditional expression where [specVars \ nonSpecRefVars = Ø]
         // The expression should be the earliest in the list of candidates, since they are
         // traversed by depth in the expression tree.
-        // Todo: this could also be scheduling guided;
-        // we select the conditional that is most "successful" based on incoming dependencies.
+        // @Todo: this should be guided by selecting the conditional expression that contains a
+        // critical variable.
         for (const auto& candidate : m_candidates) {
             std::vector<AstVar*> intersection;
             std::set_intersection(candidate.specVars.begin(), candidate.specVars.end(),
@@ -605,7 +625,7 @@ public:
     std::set<AstVar*> condVars() const {
         return chosenCandidate ? chosenCandidate->specVars : std::set<AstVar*>();
     }
-    AstNode* condExpr() const { return chosenCandidate ? chosenCandidate->condExpr : nullptr; }
+    AstNode* brExpr() const { return chosenCandidate ? chosenCandidate->brExpr : nullptr; }
 };
 
 void V3Speculation::gatherConditionalSpecs(AstNodeModule* modp, Speculateables& speculateables) {
@@ -624,8 +644,8 @@ void V3Speculation::gatherConditionalSpecs(AstNodeModule* modp, Speculateables& 
                     Speculateable s;
                     s.prod = m_mtaskIdToMTask.at(*varp->prodMtaskIds().begin());
                     s.cons = mtaskp;
-                    s.condSpec.brExpr = v.condExpr();
-                    s.condSpec.specVars = v.condVars();
+                    s.condSpec.brExpr = v.brExpr();
+                    s.specVars = v.condVars();
                     speculateables[s.cons].push_back(s);
                     break;
                 }

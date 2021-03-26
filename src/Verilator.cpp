@@ -596,7 +596,7 @@ static void verilate(const string& argString) {
         V3Waiver::write(v3Global.opt.waiverOutput());
     }
 
-    V3Error::abortIfWarnings();
+    // V3Error::abortIfWarnings();
 
     if (v3Global.hierPlanp()) {  // This run is for just write a makefile
         UASSERT(v3Global.opt.hierarchical(), "hierarchical must be set");
@@ -628,7 +628,7 @@ static void verilate(const string& argString) {
     }
 
     // Final writing shouldn't throw warnings, but...
-    V3Error::abortIfWarnings();
+    // V3Error::abortIfWarnings();
     // Cleanup memory for valgrind leak analysis
     v3Global.clear();
     FileLine::deleteAllRemaining();
