@@ -126,15 +126,15 @@ public:
 
     inline bool signalUpstreamSpecDone(bool evenCycle) {
         if (evenCycle) {
-            vluint32_t upstreamDepsDone
+            vluint32_t upstreamSpecDepsDone
                 = 1 + m_upstreamSpecDepsDone.fetch_add(1, std::memory_order_release);
-            assert(upstreamDepsDone <= m_upstreamDepCount);
-            return (upstreamDepsDone == m_upstreamDepCount);
+            assert(upstreamSpecDepsDone <= m_upstreamSpecDepCount);
+            return (upstreamSpecDepsDone == m_upstreamSpecDepCount);
         } else {
-            vluint32_t upstreamDepsDone_prev
+            vluint32_t upstreamSpecDepsDone_prev
                 = m_upstreamSpecDepsDone.fetch_sub(1, std::memory_order_release);
-            assert(upstreamDepsDone_prev > 0);
-            return (upstreamDepsDone_prev == 1);
+            assert(upstreamSpecDepsDone_prev > 0);
+            return (upstreamSpecDepsDone_prev == 1);
         }
     }
 
