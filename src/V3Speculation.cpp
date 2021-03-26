@@ -437,13 +437,6 @@ bool V3Speculation::isCriticalVariable(AstVar* varp, ExecMTask* consp) {
     for (V3GraphEdge* edgep = prodp->outBeginp(); edgep; edgep = edgep->outNextp()) {
         if (consp != dynamic_cast<ExecMTask*>(edgep->top())) continue;
 
-        // For now, also filter tasks which have more than 1 incoming edge in the dependency
-        // graph, post transitive edge removal. This is to avoid speculating when we anyways
-        // have to wait on another task to finish. @Todo: This should be guided by scheduling!
-        int nonTransIn = 0;
-        for (auto* edgep = consp->inBeginp(); edgep; edgep = edgep->inNextp()) { nonTransIn++; }
-        if (nonTransIn > 1) { continue; }
-
         std::vector<AstVar*> sharedVars;
 
         auto& prodOuts = m_dfgs.at(prodp)->outs();
@@ -607,8 +600,6 @@ public:
         // Determine the conditional expression where [specVars \ nonSpecRefVars = Ø]
         // The expression should be the earliest in the list of candidates, since they are
         // traversed by depth in the expression tree.
-        // @Todo: this should be guided by selecting the conditional expression that contains a
-        // critical variable.
         for (const auto& candidate : m_candidates) {
             std::vector<AstVar*> intersection;
             std::set_intersection(candidate.specVars.begin(), candidate.specVars.end(),
@@ -636,7 +627,8 @@ void V3Speculation::gatherConditionalSpecs(AstNodeModule* modp, Speculateables& 
         auto* mtaskp = static_cast<ExecMTask*>(vtxp);
         ConditionalSpecDetectionVisitor v(mtaskp->bodyp());
 
-        if (v.isSpeculateable()) {
+        // Speculate only if isSpeculateable and it actually has an incoming dependency edge.
+        if (v.isSpeculateable() && (mtaskp->inBeginp() != nullptr)) {
             // Speculate if one of the variables inside the speculated conditional expression is a
             // critical variable
             for (auto* varp : v.condVars()) {
