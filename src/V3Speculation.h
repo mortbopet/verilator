@@ -34,6 +34,34 @@ struct VarReplInfo {
 
 using VarReplMapping = std::unordered_map<AstVar*, VarReplInfo>;
 
+struct CondSpeculateable {
+    // Branch expression identified to be speculateable
+    AstNode* brExpr = nullptr;
+    // Dummy var generated when exchanging old cond expression
+    AstVar* dummyVar = nullptr;
+    // Old cond expression, that is reemitted during speculative commit
+    AstNode* condExpr = nullptr;
+
+    // Set of variables that is referenced within the conditional expression (which are
+    // speculative)
+    std::set<AstVar*> specVars;
+};
+
+/**
+ * @brief The Speculateable struct
+ * Maintains the set of producer/consumer MTasks which share a boolean variable, wherein the
+ * relationship has been determined to be speculateable.
+ */
+struct Speculateable {
+    // A boolean variable that is speculative
+    AstVar* specBoolVar = nullptr;
+    CondSpeculateable condSpec;
+    ExecMTask* prod = nullptr;
+    ExecMTask* cons = nullptr;
+    bool isCondSpec() const { return condSpec.brExpr != nullptr; }
+    bool isBoolSpec() const { return condSpec.brExpr == nullptr; }
+};
+using Speculateables = std::map<ExecMTask*, std::vector<Speculateable>>;
 class V3Speculation {
 public:
     V3Speculation();
@@ -44,21 +72,13 @@ private:
         std::set<AstVar*> outs;
     };
 
-    /**
-     * @brief The Speculateable struct
-     * Maintains the set of producer/consumer MTasks which share a boolean variable, wherein the
-     * relationship has been determined to be speculateable.
-     */
-    struct Speculateable {
-        AstVar* specVar = nullptr;
-        ExecMTask* prod = nullptr;
-        ExecMTask* cons = nullptr;
-    };
-
     AstNode* genCommitSpecVarStmts(const VarReplMapping&);
     void updateDataflowInfo(AstNodeModule* modp);
     void speculateModule(AstNodeModule* nodep);
-    void doSpeculation(AstNodeModule* modp, const Speculateable& s);
+    void doSpeculation(AstNodeModule* modp, Speculateable s);
+    void gatherBoolVarSpecs(AstNodeModule* modp, Speculateables& speculateables);
+    void gatherConditionalSpecs(AstNodeModule* modp, Speculateables& speculateables);
+    bool isCriticalVariable(AstVar* varp, ExecMTask* consp);
 
     /**
      * @brief removeDependency

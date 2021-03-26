@@ -1,4 +1,4 @@
-// -*- mode: C++; c-file-style: "cc-mode" -*-
+﻿// -*- mode: C++; c-file-style: "cc-mode" -*-
 //*************************************************************************
 // DESCRIPTION: Verilator: Constant folding
 //
@@ -28,6 +28,58 @@
 
 inline string specNameSuffix(bool branch) { return "__SPEC__" + string(branch ? "t" : "f"); }
 
+inline void replaceBool(AstNode* oldp, bool value) {
+    UASSERT(oldp, "Null old");
+    AstNode* newp = new AstConst(oldp->fileline(), value);
+    newp->dtypeFrom(oldp);
+    oldp->replaceWith(newp);
+    VL_DO_DANGLING(oldp->deleteTree(), oldp);
+}
+
+inline AstVar* replaceVar(AstNode* oldp, string prefix) {
+    UASSERT(oldp, "Null old");
+    AstVar* dummyvar = new AstVar(nullptr, AstVarType::BLOCKTEMP, prefix, VFlagLogicPacked(), 0);
+    AstNode* newp = new AstVarRef(oldp->fileline(), dummyvar, VAccess::READ);
+    newp->dtypeFrom(oldp);
+    oldp->replaceWith(newp);
+    VL_DO_DANGLING(oldp->deleteTree(), oldp);
+    return dummyvar;
+}
+
+class SpecCondExprReplaceVisitor final : public AstNVisitor {
+private:
+    const Speculateable& m_s;  // variables/expressions to replace
+    AstVar* m_dummyVar = nullptr;
+    AstNode* m_oldCondExpr = nullptr;
+
+public:
+    void visit(AstNode* nodep) { iterateChildren(nodep); }
+
+    void checkCondp(AstNode* nodep, AstNode* condp) {
+        if (nodep == m_s.condSpec.brExpr) {
+            // First we clone the conditional expression whereafter it is replaced with a dummy
+            // variable.
+            m_oldCondExpr = condp->cloneTree(false);
+            m_dummyVar = replaceVar(condp, "__SPEC__cond_dummy");
+        } else {
+            visit(static_cast<AstNode*>(nodep));
+        }
+    }
+
+    void visit(AstNodeCond* nodep) { checkCondp(nodep, nodep->condp()); }
+    void visit(AstNodeIf* nodep) { checkCondp(nodep, nodep->condp()); }
+    void visit(AstCCall* ccallp) { visit(ccallp->funcp()); }
+
+public:
+    explicit SpecCondExprReplaceVisitor(AstMTaskBody* bodyp, const Speculateable& s)
+        : m_s(s) {
+        visit(bodyp);
+    }
+
+    AstVar* dummyVar() const { return m_dummyVar; }
+    AstNode* condExpr() const { return m_oldCondExpr; }
+};
+
 class SpeculativeReplaceVisitor final : public AstNVisitor {
 private:
     // NODE STATE
@@ -37,7 +89,7 @@ private:
     // Mapping between non-speculative to replaced speculative variable, which is being written to
     // in the partition.
     VarReplMapping m_specOutVars;
-    AstVar* m_varp;  // Boolean variable to speculate on
+    const Speculateable& m_s;  // variables/expressions to replace
     bool m_branch;
     AstMTaskBody* m_mtaskp;
     AstNodeModule* m_modp;
@@ -49,15 +101,6 @@ private:
         AstDotDumper dump(m_mtaskp);
         dump.dumpDotFilePrefixedAlways(cvtToStr(m_mtaskp->name() + "_" + cvtToStr(it++)));
     }
-
-    void replaceBool(AstNode* oldp, bool value) {
-        UASSERT(oldp, "Null old");
-        AstNode* newp = new AstConst(oldp->fileline(), value);
-        newp->dtypeFrom(oldp);
-        oldp->replaceWith(newp);
-        VL_DO_DANGLING(oldp->deleteTree(), oldp);
-    }
-
     /**
      * @brief findModp
      * recursively backtrack the parent of @p nodep to locate the parent module.
@@ -77,9 +120,8 @@ private:
 
     void visit(AstNode* nodep) {
         assert(nodep->user1() == 0 && "!");
-
         nodep->user1(1);
-        dumpAST();
+
         iterateChildren(nodep);
     }
 
@@ -87,7 +129,7 @@ private:
         auto* varrefp = dynamic_cast<AstVarRef*>(assignp->lhsp());
         UASSERT(varrefp, "Assignment to non-variable?");
         AstVar* prevarp = varrefp->varp();
-        UASSERT(prevarp != m_varp, "Assignment to variable we speculate on?");
+        UASSERT(prevarp != m_s.specBoolVar, "Assignment to variable we speculate on?");
 
         assignp->dump(cout);
         cout << endl;
@@ -108,9 +150,40 @@ private:
         visit(static_cast<AstNode*>(assignp));
     }
 
+    bool isSpeculatedCondExpr(AstNode* nodep) const {
+        if (auto* varrefp = dynamic_cast<AstVarRef*>(nodep)) {
+            return varrefp->varp() == m_s.condSpec.dummyVar;
+        }
+        return false;
+    }
+
+    // AstNodeCond and AstNodeIf don't inherit from the same parent, but have identical structure,
+    // hmpfh...
+    void handleBranch(AstNode* parent, AstNode* condp, AstNode* thenp, AstNode* elsep) {
+        if (isSpeculatedCondExpr(condp)) {
+            // Exchange parent with the branch corresponding to m_branch
+            parent->replaceWith(m_branch ? thenp : elsep);
+            VL_DO_DANGLING(parent->deleteTree(), parent);
+        } else {
+            visit(condp);
+            visit(thenp);
+            visit(elsep);
+        }
+    }
+
+    void visit(AstNodeCond* nodep) {
+        handleBranch(nodep, nodep->condp(), nodep->expr1p(), nodep->expr2p());
+    }
+
+    void visit(AstNodeIf* nodep) {
+        handleBranch(nodep, nodep->condp(), nodep->ifsp(), nodep->elsesp());
+    }
+
     void visit(AstVarRef* varrefp) {
         AstVar* varp = varrefp->varp();
-        if (varp == m_varp) {
+
+        // Only replace when we are not replacing a conditional expression
+        if (varp == m_s.specBoolVar) {
             replaceBool(varrefp, m_branch);
             return;
         }
@@ -137,14 +210,15 @@ private:
         // Modify target function call to the new, speculative function
         ccallp->funcp(specfuncp);
 
-        // Iterate into the speculative function, further replacing occurances of m_varp
+        // Iterate into the speculative function, further replacing occurances of m_s.varp or
+        // m_s.expr
         visit(specfuncp);
     }
 
 public:
-    explicit SpeculativeReplaceVisitor(AstNodeModule* modp, AstMTaskBody* bodyp, AstVar* varp,
-                                       bool branch)
-        : m_varp(varp)
+    explicit SpeculativeReplaceVisitor(AstNodeModule* modp, AstMTaskBody* bodyp,
+                                       const Speculateable& s, bool branch)
+        : m_s(s)
         , m_branch(branch)
         , m_mtaskp(bodyp)
         , m_modp(modp) {
@@ -153,17 +227,6 @@ public:
 
     const VarReplMapping& specOutVars() const { return m_specOutVars; }
 };
-
-//######################################################################
-// V3Speculation
-
-V3Speculation::V3Speculation() {
-    // Process each module in turn
-    for (AstNodeModule* nodep = v3Global.rootp()->modulesp(); nodep;
-         nodep = VN_CAST(nodep->nextp(), NodeModule)) {
-        speculateModule(nodep);
-    }
-}
 
 class GatherScopeNamesVisitor final : public AstNVisitor,
                                       public std::unordered_map<AstVar*, std::string> {
@@ -179,28 +242,86 @@ public:
     GatherScopeNamesVisitor(ExecMTask* mtaskp) { iterate(mtaskp->bodyp()); }
 };
 
-void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
+//######################################################################
+// V3Speculation
+
+V3Speculation::V3Speculation() {
+    // Process each module in turn
+    for (AstNodeModule* nodep = v3Global.rootp()->modulesp(); nodep;
+         nodep = VN_CAST(nodep->nextp(), NodeModule)) {
+        speculateModule(nodep);
+    }
+}
+
+AstNode* genCommitSpecVarStmts(const VarReplMapping& mapping) {
+    AstNode* stmtsp = nullptr;
+    for (const auto& it : mapping) {
+        // Base varrefs on original var reference (maintains scope, fileline info etc.)
+        auto* fromp = it.second.varrefp->cloneTree(false);
+        auto* top = it.second.varrefp->cloneTree(false);
+
+        fromp->varp(it.second.replvarp);
+        fromp->access(VAccess::READ);
+        top->varp(it.first);
+        fromp->access(VAccess::WRITE);
+
+        auto* assignp = new AstAssign(it.second.assignp->fileline(), top, fromp);
+
+        stmtsp = AstNode::addNext(stmtsp, assignp);
+    }
+    return stmtsp;
+}
+
+void emitSpecResolution(AstMTaskBody* bodyp, ExecMTask* mtaskp, bool branch,
+                        const Speculateable& s, VarReplMapping& replacedVars, string hierName) {
+    AstNode* condp = nullptr;
+    if (s.specBoolVar) {
+        condp = new AstVarRef(s.specBoolVar->fileline(), s.specBoolVar, VAccess::READ);
+        static_cast<AstVarRef*>(condp)->hiernameToProt(hierName);
+    }
+    if (s.condSpec.condExpr) {
+        condp = s.condSpec.condExpr->cloneTree(false);
+    } else {
+        assert(false);
+    }
+
+    if (!branch) { condp = new AstNot(condp->fileline(), condp); }
+    bodyp->addStmtsp(new AstSpecResolveBool(s.cons->bodyp()->fileline(), mtaskp, condp,
+                                            genCommitSpecVarStmts(replacedVars)));
+}
+
+void V3Speculation::doSpeculation(AstNodeModule* modp, Speculateable s) {
     auto* execGraphp = v3Global.rootp()->execGraphp();
     updateDataflowInfo(modp);
 
     GatherScopeNamesVisitor scopeNames(s.cons);
-
+    string scopeName;
+    if (s.specBoolVar) { scopeName = scopeNames.at(s.specBoolVar); }
     m_dfgs[s.cons]->dumpDotFilePrefixedAlways("DFG_" + cvtToStr(s.cons->id()));
-    AstDotDumper dump(s.cons->bodyp());
-    dump.dumpDotFilePrefixedAlways(cvtToStr(s.cons->id()));
+
+    // Before duplicating MTask, perform replacement of conditional expression. This method will
+    // replace the conditional expr with a temporary variable. This variable will then be replaced
+    // by SpeculativeReplaceVisitor.
+    if (s.condSpec.condExpr) {
+        SpecCondExprReplaceVisitor specExprVisitor(s.cons->bodyp(), s);
+        s.condSpec.dummyVar = specExprVisitor.dummyVar();
+        s.condSpec.condExpr = specExprVisitor.condExpr();
+    }
+
+    assert(false
+           && "Now we have a possible different variable to replace than what is in s.specVars. "
+              "We need to be able to dinstinguish between the upstream spec vars (which are real) "
+              "and the speculated vars (which may be dummies");
 
     // Duplicate the MTask, representing the true and false constant value of the speculation
     // variable
     auto* consmtbodyp_t = s.cons->bodyp()->cloneTree(false);
     auto* consmtbodyp_f = s.cons->bodyp()->cloneTree(false);
 
-    AstDotDumper dump3(consmtbodyp_t);
-    dump3.dumpDotFilePrefixedAlways("Truebody_copy_pre");
-
     // Speculate into them. Manage scope of SpeculativeReplaceVisitors to ensure destruction of
     // user pointers.
     auto performSpeculation = [&](AstMTaskBody* mtaskbody, bool branch) {
-        SpeculativeReplaceVisitor specVisitor(modp, mtaskbody, s.specVar, branch);
+        SpeculativeReplaceVisitor specVisitor(modp, mtaskbody, s, branch);
         return specVisitor.specOutVars();
     };
     VarReplMapping specTOutVars = performSpeculation(consmtbodyp_t, true);
@@ -222,20 +343,30 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
 
     s.prod->addDownstreamSpeculativeTask(consmtp_t);
     s.prod->addDownstreamSpeculativeTask(consmtp_f);
+
+    // Inherit replaced MTasks' downstream tasks
+    for (const auto& mtaskp : s.cons->downstreamSpeculativeMTasks()) {
+        consmtp_f->addDownstreamSpeculativeTask(mtaskp);
+        consmtp_t->addDownstreamSpeculativeTask(mtaskp);
+    }
+
+    execGraphp->mutableDepGraphp()->dumpDotFilePrefixedAlways("dep_prae_spec");
+
     // Create dependency edges for all incoming variables except the speculated boolean. We cannot
     // use the dependency graph here, due to transitive edge removal, and by the fact that the only
     // remaining dependency edge in the graph is the actual boolean which we are currently
     // speculating on.
     // @todo: Only create edge if actual dependency (ie. avoid loops, we need topological sort)
     for (const auto& invarp : m_io.at(modp).at(s.cons).ins) {
-        if (invarp == s.specVar) continue;
+        if (invarp == s.specBoolVar) continue;
         if (invarp->varType() == AstVarType::PORT) continue;
 
-        ExecMTask* prodMTaskp = m_varProducedBy.at(invarp);
-        std::vector<ExecMTask*> inEdges = {prodMTaskp};
-        if (prodMTaskp->partnerSpecMTaskp() != nullptr) {
+        auto prodMTaskp = m_varProducedBy.find(invarp);
+        if (prodMTaskp == m_varProducedBy.end()) continue;
+        std::vector<ExecMTask*> inEdges = {prodMTaskp->second};
+        if (prodMTaskp->second->partnerSpecMTaskp() != nullptr) {
             // Also depend on the other speculative branch
-            inEdges.push_back(prodMTaskp->partnerSpecMTaskp());
+            inEdges.push_back(prodMTaskp->second->partnerSpecMTaskp());
         }
         for (auto* prodp : inEdges) {
             assert(prodp != consmtp_t);
@@ -246,16 +377,10 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
     }
 
     // Add speculative resolution statements to end of speculative bodies
-    auto* condp_t = new AstVarRef(s.specVar->fileline(), s.specVar, VAccess::READ);
-    condp_t->hiernameToProt(scopeNames.at(s.specVar));
-    consmtbodyp_t->addStmtsp(new AstSpecResolveBool(s.cons->bodyp()->fileline(), consmtp_t,
-                                                    condp_t, genCommitSpecVarStmts(specTOutVars)));
+    emitSpecResolution(consmtbodyp_t, consmtp_t, true, s, specTOutVars, scopeName);
+    emitSpecResolution(consmtbodyp_f, consmtp_f, false, s, specFOutVars, scopeName);
 
-    auto* condp_f = new AstVarRef(s.specVar->fileline(), s.specVar, VAccess::READ);
-    condp_f->hiernameToProt(scopeNames.at(s.specVar));
-    consmtbodyp_f->addStmtsp(new AstSpecResolveBool(s.cons->bodyp()->fileline(), consmtp_f,
-                                                    new AstNot(condp_f->fileline(), condp_f),
-                                                    genCommitSpecVarStmts(specFOutVars)));
+    execGraphp->mutableDepGraphp()->dumpDotFilePrefixedAlways("dep_gere_spec");
 
     // The speculated mtasks should inherit the outgoing edges from their origin MTask
     for (V3GraphEdge* edgep = s.cons->outBeginp(); edgep; edgep = edgep->outNextp()) {
@@ -274,39 +399,56 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, const Speculateable& s) {
     execGraphp->mutableDepGraphp()->dumpDotFilePrefixedAlways("dep_post_spec");
 }
 
-AstNode* V3Speculation::genCommitSpecVarStmts(const VarReplMapping& mapping) {
-    AstNode* stmtsp = nullptr;
-    for (const auto& it : mapping) {
-        // Base varrefs on original var reference (maintains scope, fileline info etc.)
-        auto* fromp = it.second.varrefp->cloneTree(false);
-        auto* top = it.second.varrefp->cloneTree(false);
+// Locate MTasks which depend on this variable:
+// - There is an edge between the two MTasks
+// - The given variable is the only depending variable produced by the source MTask
+//
+// Due to transitive edges, the consuming MTask can inherit the incoming dependencies of
+// the producing mtask through speculation.
+bool V3Speculation::isCriticalVariable(AstVar* varp, ExecMTask* consp) {
+    ExecMTask* prodp = m_mtaskIdToMTask.at(*varp->prodMtaskIds().begin());
 
-        fromp->varp(it.second.replvarp);
-        fromp->access(VAccess::READ);
-        top->varp(it.first);
-        fromp->access(VAccess::WRITE);
+    // Locate MTasks which depend on this variable:
+    // - There is an edge between the two MTasks
+    // - The given variable is the only depending variable produced by the source MTask
+    //
+    // Due to transitive edges, the consuming MTask can inherit the incoming dependencies of
+    // the producing mtask through speculation.
+    for (V3GraphEdge* edgep = prodp->outBeginp(); edgep; edgep = edgep->outNextp()) {
+        if (consp != dynamic_cast<ExecMTask*>(edgep->top())) continue;
 
-        auto* assignp = new AstAssign(it.second.assignp->fileline(), top, fromp);
+        // For now, also filter tasks which have more than 1 incoming edge in the dependency
+        // graph, post transitive edge removal. This is to avoid speculating when we anyways
+        // have to wait on another task to finish. @Todo: This should be guided by scheduling!
+        int nonTransIn = 0;
+        for (auto* edgep = consp->inBeginp(); edgep; edgep = edgep->inNextp()) { nonTransIn++; }
+        if (nonTransIn > 1) { continue; }
 
-        stmtsp = AstNode::addNext(stmtsp, assignp);
+        std::vector<AstVar*> sharedVars;
+
+        auto& prodOuts = m_dfgs.at(prodp)->outs();
+        auto& consIns = m_dfgs.at(consp)->ins();
+
+        assert(std::find(prodOuts.begin(), prodOuts.end(), varp) != prodOuts.end()
+               && "varp should be in produced set of producing mtask");
+
+        std::set_intersection(prodOuts.begin(), prodOuts.end(), consIns.begin(), consIns.end(),
+                              std::back_inserter(sharedVars));
+        return sharedVars.size() == 1;
     }
-    return stmtsp;
+    return false;
 }
 
-void V3Speculation::speculateModule(AstNodeModule* modp) {
+void V3Speculation::gatherBoolVarSpecs(AstNodeModule* modp, Speculateables& speculateable) {
     V3Graph* mtasksp = v3Global.rootp()->execGraphp()->mutableDepGraphp();
 
     // Locate module variables
     std::vector<AstVar*> boolVars1;
     for (AstNode* nodep = modp->stmtsp(); nodep; nodep = nodep->nextp()) {
         if (AstVar* varp = dynamic_cast<AstVar*>(nodep)) {
-            // Reset producer/consumer IDs (updated later)
-            varp->clearMTaskIds();
             if (varp->widthMin() == 1) { boolVars1.push_back(varp); }
         }
     }
-
-    updateDataflowInfo(modp);
 
     // Dependency filtering
     // Filter to the set of dependencies which result as an in-evaluation dependency
@@ -335,8 +477,6 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
                  });
 
     // Locate boolean edges in the dependency graph
-    std::map<ExecMTask*, std::vector<Speculateable>> speculateable;
-
     for (AstVar* varp : boolVars2) {
         ExecMTask* prodp = m_mtaskIdToMTask.at(*varp->prodMtaskIds().begin());
 
@@ -348,6 +488,15 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
         // the producing mtask through speculation.
         for (V3GraphEdge* edgep = prodp->outBeginp(); edgep; edgep = edgep->outNextp()) {
             ExecMTask* consp = dynamic_cast<ExecMTask*>(edgep->top());
+
+            // For now, also filter tasks which have more than 1 incoming edge in the dependency
+            // graph, post transitive edge removal. This is to avoid speculating when we anyways
+            // have to wait on another task to finish. @Todo: This should be guided by scheduling!
+            int nonTransIn = 0;
+            for (auto* edgep = consp->inBeginp(); edgep; edgep = edgep->inNextp()) {
+                nonTransIn++;
+            }
+            if (nonTransIn > 1) { continue; }
 
             std::vector<AstVar*> sharedVars;
 
@@ -368,11 +517,133 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
                 Speculateable s;
                 s.prod = prodp;
                 s.cons = consp;
-                s.specVar = varp;
+                s.specBoolVar = varp;
+                s.condSpec.condExpr = nullptr;
                 speculateable[s.cons].push_back(s);
             }
         }
     }
+}
+
+class ConditionalSpecDetectionVisitor final : public AstNVisitor {
+private:
+    struct Candidate {
+        // Set of variables contained within the possibly speculative conditional
+        std::set<AstVar*> specVars;
+        AstNode* condExpr = nullptr;
+    };
+
+    // A stack of the current candidates that we are traversing
+    std::vector<Candidate*> inCandidateStack;
+
+    std::set<AstVar*> reffedNonSpecVars;
+    std::vector<Candidate> m_candidates;
+
+    // Set of variables referenced outside the speculated variable
+    std::set<AstVar*> refNonSpecVars;
+
+    Candidate const* chosenCandidate = nullptr;
+
+public:
+    void visit(AstNode* nodep) { iterateChildren(nodep); }
+
+    void visit(AstVarRef* varrefp) {
+        if (!inCandidateStack.empty()) {
+            // For all candidates in the stack, this will be a speculative reference
+            for (auto& candidate : inCandidateStack) {
+                candidate->specVars.insert(varrefp->varp());
+            }
+        } else {
+            reffedNonSpecVars.insert(varrefp->varp());
+        }
+        visit(static_cast<AstNode*>(varrefp));
+    }
+
+    void handleCondExpr(AstNode* nodep, AstNode* ifp, AstNode* thenp, AstNode* elsep) {
+        m_candidates.emplace_back();
+        auto* newCandidate = &(*m_candidates.rbegin());
+        inCandidateStack.push_back(newCandidate);
+        newCandidate->condExpr = nodep;
+        visit(static_cast<AstNode*>(ifp));
+        inCandidateStack.pop_back();
+        visit(static_cast<AstNode*>(thenp));
+        visit(static_cast<AstNode*>(elsep));
+    }
+
+    void visit(AstNodeCond* nodep) {
+        handleCondExpr(nodep, nodep->condp(), nodep->expr1p(), nodep->expr2p());
+    }
+
+    void visit(AstNodeIf* nodep) {
+        handleCondExpr(nodep, nodep->condp(), nodep->ifsp(), nodep->elsesp());
+    }
+
+    void visit(AstCCall* ccallp) { visit(ccallp->funcp()); }
+
+public:
+    explicit ConditionalSpecDetectionVisitor(AstMTaskBody* bodyp) {
+        // Traverse the circuit to detect candidate conditional expressions
+        visit(bodyp);
+        // Determine the conditional expression where [specVars \ nonSpecRefVars = Ø]
+        // The expression should be the earliest in the list of candidates, since they are
+        // traversed by depth in the expression tree.
+        // Todo: this could also be scheduling guided;
+        // we select the conditional that is most "successful" based on incoming dependencies.
+        for (const auto& candidate : m_candidates) {
+            std::vector<AstVar*> intersection;
+            std::set_intersection(candidate.specVars.begin(), candidate.specVars.end(),
+                                  refNonSpecVars.begin(), refNonSpecVars.end(),
+                                  std::back_inserter(intersection));
+            if (intersection.empty()) {
+                chosenCandidate = &candidate;
+                break;
+            }
+        }
+    }
+
+    bool isSpeculateable() const { return chosenCandidate != nullptr; }
+    std::set<AstVar*> condVars() const {
+        return chosenCandidate ? chosenCandidate->specVars : std::set<AstVar*>();
+    }
+    AstNode* condExpr() const { return chosenCandidate ? chosenCandidate->condExpr : nullptr; }
+};
+
+void V3Speculation::gatherConditionalSpecs(AstNodeModule* modp, Speculateables& speculateables) {
+    V3Graph* mtasksp = v3Global.rootp()->execGraphp()->mutableDepGraphp();
+
+    // For each mtask, ...
+    for (auto* vtxp = mtasksp->verticesBeginp(); vtxp; vtxp = vtxp->verticesNextp()) {
+        auto* mtaskp = static_cast<ExecMTask*>(vtxp);
+        ConditionalSpecDetectionVisitor v(mtaskp->bodyp());
+
+        if (v.isSpeculateable()) {
+            // Speculate if one of the variables inside the speculated conditional expression is a
+            // critical variable
+            for (auto* varp : v.condVars()) {
+                if (isCriticalVariable(varp, mtaskp)) {
+                    Speculateable s;
+                    s.prod = m_mtaskIdToMTask.at(*varp->prodMtaskIds().begin());
+                    s.cons = mtaskp;
+                    s.condSpec.brExpr = v.condExpr();
+                    s.condSpec.specVars = v.condVars();
+                    speculateables[s.cons].push_back(s);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+void V3Speculation::speculateModule(AstNodeModule* modp) {
+    V3Graph* mtasksp = v3Global.rootp()->execGraphp()->mutableDepGraphp();
+    updateDataflowInfo(modp);
+    std::map<ExecMTask*, std::vector<Speculateable>> speculateable;
+
+    AstDotDumper dump(v3Global.rootp());
+    dump.dumpDotFilePrefixedAlways("ast_pre");
+
+    gatherBoolVarSpecs(modp, speculateable);
+    gatherConditionalSpecs(modp, speculateable);
 
     // For now, only speculate a single variable in partitions which could in theory speculate
     // multiple
@@ -405,13 +676,17 @@ void V3Speculation::updateDataflowInfo(AstNodeModule* modp) {
         }
     }
 
-    // Gather DFGs for each MTask. This also updates the producer/consumer info of each variable
+    // Gather DFGs for each MTask. This also updates the producer/consumer info of each
+    // variable
     V3Graph* mtasksp = v3Global.rootp()->execGraphp()->mutableDepGraphp();
     for (V3GraphVertex* vxp = mtasksp->verticesBeginp(); vxp; vxp = vxp->verticesNextp()) {
         ExecMTask* mtaskp = dynamic_cast<ExecMTask*>(vxp);
         m_nextMTaskID = m_nextMTaskID <= mtaskp->id() ? mtaskp->id() + 1 : m_nextMTaskID;
         m_dfgs[mtaskp] = new DFG(mtaskp->bodyp());
         m_mtaskIdToMTask[mtaskp->id()] = mtaskp;
+
+        // AstDotDumper dump(mtaskp->bodyp());
+        // dump.dumpDotFilePrefixedAlways(mtaskp->name());
     }
 
     for (const auto& varp : variables) {

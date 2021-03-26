@@ -363,7 +363,7 @@ void AstExecGraph::dumpDotFile(const string& filename, const bool packed) const 
         string label = "label=\"" + mtaskp->name() + " (" + cvtToStr(mtaskp->startTime()) + ":"
                        + std::to_string(mtaskp->endTime()) + ")" + "\"";
         string color = " ";
-        if (onCP) {
+        if (onCP && false) {
             color += "color=\"red\"";
         } else if (mtaskp->speculative() != ExecMTask::Speculative::None) {
             color += mtaskp->speculative() == ExecMTask::Speculative::True ? "color=\"green\""
@@ -395,6 +395,12 @@ void AstExecGraph::dumpDotFile(const string& filename, const bool packed) const 
                       & (std::find(m_critPath.begin(), m_critPath.end(), top) != m_critPath.end());
                 *logp << "  " << vxp->name() << " -> " << top->name()
                       << (onCP ? "[color=\"red\"]" : "") << "\n";
+            }
+
+            for (const auto& specDep : mtaskp->downstreamSpeculativeMTasks()) {
+                *logp << "  " << vxp->name() << " -> " << specDep->name()
+                      << "[color=\"purple\" style=\"dashed\"]"
+                      << "\n";
             }
         }
     }

@@ -1529,6 +1529,7 @@ class EmitCImp final : EmitCStmts {
             // We signal regardlessly of whether the task is on the same thread or not (to make
             // dependency counter logic valid).
             for (ExecMTask* mtaskp : curExecMTaskp->downstreamSpeculativeMTasks()) {
+                assert(mtaskp->speculative() != ExecMTask::Speculative::None);
                 puts("vlTOPp->__Vm_mt_" + cvtToStr(mtaskp->id())
                      + ".signalUpstreamSpecDone(even_cycle);\n");
             }
@@ -2455,7 +2456,7 @@ void EmitCImp::emitMTaskVertexCtors(bool* firstp) {
         if (packedMTaskMayBlock(mtp) > 0 || isSpeculative) {
             emitCtorSep(firstp);
             puts("__Vm_mt_" + cvtToStr(mtp->id()) + "(" + cvtToStr(edgesInCt) + ", "
-                 + (isSpeculative ? "0" : "1") + ")");
+                 + (isSpeculative ? "1" : "0") + ")");
         }
         // Each mtask with no packed successor will become a dependency
         // for the final node:
