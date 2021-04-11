@@ -29,7 +29,7 @@ DFG::DFG(AstMTaskBody* bodyp)
     : m_bodyp(bodyp) {
     iterate(bodyp);
 
-    if (debug() || true) {
+    if (debug()) {
         std::cout << "DFG:" << bodyp->execMTaskp()->name() + " I/O is" << endl;
         std::cout << "\tins: ";
         for (const auto& in : m_io.ins) { std::cout << in->nameProtect() << ", "; }
@@ -49,9 +49,10 @@ void DFG::visit(AstNode* nodep) {
     iterateChildren(nodep);
     for (auto* childp : {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
         if (childp == nullptr) continue;
-        DFGVertex* srcvtp = m_nodeToDFGVp[childp];
-        UASSERT(srcvtp != nodeDfgp->second, "?");
-        new DFGEdge(this, srcvtp, nodeDfgp->second, 1);
+        auto it = m_nodeToDFGVp.find(childp);
+        if (it == m_nodeToDFGVp.end()) { continue; }
+        UASSERT(it->second != nodeDfgp->second, "?");
+        new DFGEdge(this, it->second, nodeDfgp->second, 1);
     }
 }
 

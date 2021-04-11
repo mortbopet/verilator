@@ -159,7 +159,7 @@ std::ostream& operator<<(std::ostream& os, V3GraphVertex* vertexp) {
 
 void V3GraphEdge::init(V3Graph* graphp, V3GraphVertex* fromp, V3GraphVertex* top, int weight,
                        bool cutable) {
-    UASSERT(fromp, "Null from pointer");
+    assert(fromp && "Null from pointer");
     UASSERT(top, "Null to pointer");
     m_fromp = fromp;
     m_top = top;

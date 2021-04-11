@@ -175,9 +175,9 @@ private:
             parent->replaceWith(m_branch ? thenp->cloneTree(false) : elsep->cloneTree(false));
             VL_DO_DANGLING(parent->deleteTree(), parent);
         } else {
-            if (condp) visit(condp);
-            if (thenp) visit(thenp);
-            if (elsep) visit(elsep);
+            if (condp) iterate(condp);
+            if (thenp) iterate(thenp);
+            if (elsep) iterate(elsep);
         }
     }
 
@@ -189,7 +189,7 @@ private:
         handleBranch(nodep, nodep->condp(), nodep->ifsp(), nodep->elsesp());
     }
 
-    void visit(AstVarRef* varrefp) {
+    void visit(AstNodeVarRef* varrefp) {
         AstVar* varp = varrefp->varp();
 
         // Only replace when we are not replacing a conditional expression
@@ -207,7 +207,7 @@ private:
         visit(static_cast<AstNode*>(varrefp));
     }
 
-    void visit(AstCCall* ccallp) {
+    void visit(AstNodeCCall* ccallp) {
         if (ccallp->user1()) return;
         ccallp->user1(1);
 
@@ -290,8 +290,7 @@ void emitSpecResolution(AstMTaskBody* bodyp, ExecMTask* mtaskp, bool branch,
     if (s.specBoolVar) {
         condp = new AstVarRef(s.specBoolVar->fileline(), s.specBoolVar, VAccess::READ);
         static_cast<AstVarRef*>(condp)->hiernameToProt(hierName);
-    }
-    if (s.condSpec.condExpr) {
+    } else if (s.condSpec.condExpr) {
         condp = s.condSpec.condExpr->cloneTree(false);
     } else {
         assert(false);
@@ -300,6 +299,12 @@ void emitSpecResolution(AstMTaskBody* bodyp, ExecMTask* mtaskp, bool branch,
     if (!branch) { condp = new AstNot(condp->fileline(), condp); }
     bodyp->addStmtsp(new AstSpecResolveBool(s.cons->bodyp()->fileline(), mtaskp, condp,
                                             genCommitSpecVarStmts(replacedVars)));
+}
+
+void loopDetect() {
+    v3Global.rootp()->execGraphp()->mutableDepGraphp()->dumpDotFilePrefixedAlways("loopcheck");
+    // DEBUG: loop detection
+    v3Global.rootp()->execGraphp()->mutableDepGraphp()->order();
 }
 
 void V3Speculation::doSpeculation(AstNodeModule* modp, Speculateable s) {
@@ -333,6 +338,7 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, Speculateable s) {
     // user pointers.
     std::set<AstCFunc*> replacedFunctions;
     auto performSpeculation = [&](AstMTaskBody* mtaskbody, bool branch) {
+        { AstDotDumper(mtaskbody).dumpDotFilePrefixedAlways("specbody"); }
         SpeculativeReplaceVisitor specVisitor(modp, mtaskbody, s, branch);
         replacedFunctions.insert(specVisitor.replacedFunctions().begin(),
                                  specVisitor.replacedFunctions().end());
@@ -365,8 +371,6 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, Speculateable s) {
         consmtp_t->addDownstreamSpeculativeTask(mtaskp);
     }
 
-    execGraphp->mutableDepGraphp()->dumpDotFilePrefixedAlways("dep_prae_spec");
-
     // Create dependency edges for all incoming variables except the speculated boolean. We cannot
     // use the dependency graph here, due to transitive edge removal, and by the fact that the only
     // remaining dependency edge in the graph is the actual boolean which we are currently
@@ -395,14 +399,13 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, Speculateable s) {
     emitSpecResolution(consmtbodyp_t, consmtp_t, true, s, specTOutVars, scopeName);
     emitSpecResolution(consmtbodyp_f, consmtp_f, false, s, specFOutVars, scopeName);
 
-    execGraphp->mutableDepGraphp()->dumpDotFilePrefixedAlways("dep_gere_spec");
-
     // The speculated mtasks should inherit the outgoing edges from their origin MTask
     for (V3GraphEdge* edgep = s.cons->outBeginp(); edgep; edgep = edgep->outNextp()) {
-        assert(consmtp_t != edgep->top());
-        new V3GraphEdge(execGraphp->mutableDepGraphp(), consmtp_t, edgep->top(), 1);
-        assert(consmtp_f != edgep->top());
-        new V3GraphEdge(execGraphp->mutableDepGraphp(), consmtp_f, edgep->top(), 1);
+        ExecMTask* toExecMTaskp = dynamic_cast<ExecMTask*>(edgep->top());
+        assert(consmtp_t != toExecMTaskp);
+        new V3GraphEdge(execGraphp->mutableDepGraphp(), consmtp_t, toExecMTaskp, 1);
+        assert(consmtp_f != toExecMTaskp);
+        new V3GraphEdge(execGraphp->mutableDepGraphp(), consmtp_f, toExecMTaskp, 1);
     }
 
     // Finally, delete the original MTask and its speculated functions
@@ -410,8 +413,6 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, Speculateable s) {
     s.cons->unlinkDelete(execGraphp->mutableDepGraphp());
     for (auto& specFunc : replacedFunctions) { specFunc->unlinkFrBack()->deleteTree(); }
 
-    AstDotDumper dump2(modp);
-    dump2.dumpDotFilePrefixedAlways(modp->name() + "ast_post_spec");
     execGraphp->mutableDepGraphp()->dumpDotFilePrefixedAlways("dep_post_spec");
 }
 
@@ -466,7 +467,6 @@ void V3Speculation::gatherBoolVarSpecs(AstNodeModule* modp, Speculateables& spec
     // Dependency filtering
     // Filter to the set of dependencies which result as an in-evaluation dependency
     // rank(producing node) < rank(consuming node)
-    mtasksp->order();
     std::vector<AstVar*> boolVars2;
     std::copy_if(boolVars1.begin(), boolVars1.end(), std::back_inserter(boolVars2),
                  [this](const AstVar* varp) {
@@ -679,6 +679,9 @@ void V3Speculation::updateDataflowInfo(AstNodeModule* modp) {
     m_mtaskIdToMTask.clear();
     m_varProducedBy.clear();
 
+    // Ensure up-to-date ordering (rank) of MTasks
+    v3Global.rootp()->execGraphp()->mutableDepGraphp()->order();
+
     std::vector<AstVar*> variables;
     for (AstNode* nodep = modp->stmtsp(); nodep; nodep = nodep->nextp()) {
         if (AstVar* varp = dynamic_cast<AstVar*>(nodep)) {
@@ -696,35 +699,38 @@ void V3Speculation::updateDataflowInfo(AstNodeModule* modp) {
         m_nextMTaskID = m_nextMTaskID <= mtaskp->id() ? mtaskp->id() + 1 : m_nextMTaskID;
         m_dfgs[mtaskp] = new DFG(mtaskp->bodyp());
         m_mtaskIdToMTask[mtaskp->id()] = mtaskp;
-
-        // AstDotDumper dump(mtaskp->bodyp());
-        // dump.dumpDotFilePrefixedAlways(mtaskp->name());
     }
 
     for (const auto& varp : variables) {
-        for (const int consMTaskid : varp->consMtaskIds()) {
-            auto it = m_mtaskIdToMTask.find(consMTaskid);
-            assert(it != m_mtaskIdToMTask.end());
-            m_io[modp][it->second].ins.insert(varp);
+        if (varp->prodMtaskIds().size() == 0) {
+            // Probably an input...
+            continue;
         }
+
+        // Collect inputs; An input is a dependent variable which is produced by an MTask that has
+        // a lower rank than the consuming mtask.
+        // If multiple producers, the variable is an input to an MTask if there exists a producing
+        // mtask which has lower rank than the consuming mtask.
+        for (const int consMTaskid : varp->consMtaskIds()) {
+            auto consMTask = m_mtaskIdToMTask.find(consMTaskid);
+            assert(consMTask != m_mtaskIdToMTask.end());
+
+            for (const auto& prodMTaskID : varp->prodMtaskIds()) {
+                auto prodMTask = m_mtaskIdToMTask.find(prodMTaskID);
+                if (prodMTask->second->rank() < consMTask->second->rank()) {
+                    m_io[modp][consMTask->second].ins.insert(varp);
+                    break;
+                }
+            }
+        }
+
+        // Collect outputs
         for (const int prodMTaskid : varp->prodMtaskIds()) {
             auto it = m_mtaskIdToMTask.find(prodMTaskid);
             assert(it != m_mtaskIdToMTask.end());
             ExecMTask* prodp = it->second;
             m_io[modp][prodp].outs.insert(varp);
 
-            auto preProdBy = m_varProducedBy.find(varp);
-            if (preProdBy != m_varProducedBy.end()) {
-                bool ok = false;
-                // Only valid if speculated
-                if (preProdBy->second->speculative() != ExecMTask::Speculative::None
-                    && prodp->speculative() != ExecMTask::Speculative::None) {
-                    if (preProdBy->second->partnerSpecMTaskp() != prodp->partnerSpecMTaskp()) {
-                        ok = true;
-                    }
-                }
-                assert(ok && "Multiple producers only allowed for speculative pairs");
-            }
             auto* mtask = m_mtaskIdToMTask.at(prodMTaskid);
             assert(mtask->id() == prodMTaskid
                    && "Mismatched mtask ID and actual produced mtask ID");
@@ -732,6 +738,7 @@ void V3Speculation::updateDataflowInfo(AstNodeModule* modp) {
         }
     }
 
+    /*
     cout << "IO is:" << endl;
     for (const auto& it : m_io.at(modp)) {
         cout << it.first->name();
@@ -741,4 +748,5 @@ void V3Speculation::updateDataflowInfo(AstNodeModule* modp) {
         for (const auto& it2 : it.second.outs) { cout << it2->name(); }
         cout << endl;
     }
+    */
 }

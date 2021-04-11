@@ -124,23 +124,13 @@ public:
         }
     }
 
-    inline bool signalUpstreamSpecDone(bool evenCycle) {
-        if (evenCycle) {
-            vluint32_t upstreamSpecDepsDone
-                = 1 + m_upstreamSpecDepsDone.fetch_add(1, std::memory_order_release);
-            assert(upstreamSpecDepsDone <= m_upstreamSpecDepCount);
-            return (upstreamSpecDepsDone == m_upstreamSpecDepCount);
-        } else {
-            vluint32_t upstreamSpecDepsDone_prev
-                = m_upstreamSpecDepsDone.fetch_sub(1, std::memory_order_release);
-            assert(upstreamSpecDepsDone_prev > 0);
-            return (upstreamSpecDepsDone_prev == 1);
-        }
+    inline void signalUpstreamSpecDone(bool evenCycle) {
+        m_upstreamSpecDepsDone += evenCycle ? 1 : -1;
     }
 
     inline bool areUpstreamSpecDepsDone(bool evenCycle) const {
         vluint32_t target = evenCycle ? m_upstreamSpecDepCount : 0;
-        return m_upstreamSpecDepsDone.load(std::memory_order_acquire) == target;
+        return m_upstreamSpecDepsDone == target;
     }
 
     inline void waitUntilUpstreamSpecDone(bool evenCycle) const {
