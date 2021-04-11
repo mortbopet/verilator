@@ -37,3 +37,14 @@ verilator.pc
 verilator-config.cmake
 verilator-config-version.cmake
 **/obj_dir/*
+
+spec_results/*
+.vscode/*
+.metals/*
+
+# QT creator stuff
+*.cflags
+*.config
+*.creator*
+*.cxxflags
+
