@@ -6,7 +6,9 @@ import subprocess
 import re
 import sys
 import numpy as np
+from datetime import datetime
 from collections import defaultdict
+import progressbar
 
 RESULT_DIR = os.path.join(os.curdir, "spec_results")
 VERILATOR_THREAD_VAR = "VERILATOR_THREAD_CMD"
@@ -84,7 +86,6 @@ def runTest(vl_file, cpp_file, nthreads, speculate):
     process = subprocess.Popen(pargs, stdout=subprocess.PIPE)
     (output, err) = process.communicate()
     exit_code = process.wait()
-    print(output)
     if exit_code != 0:
         print("Error: Could not verilate file")
     
@@ -122,15 +123,25 @@ if __name__ == "__main__":
 
     ensureDir(RESULT_DIR)
 
+    now = datetime.now() # current date and time
+    timestamp = now.strftime("%Y%d%m%H%M%S")
+
+    threadsToTest = [int(t) for t in args.threads.split(',')]
+    nRuns = len(threadsToTest)*args.N*2
+
     # Run tests
-    if False:
-        with open(os.path.join(RESULT_DIR, f"{args.prefix}.txt"), "w") as resfile:
-            for n_threads in [int(t) for t in args.threads.split(',')]:
+    i = 1
+    with progressbar.ProgressBar(max_value=nRuns, redirect_stdout=True) as bar:
+        with open(os.path.join(RESULT_DIR, f"{args.prefix}_{timestamp}.txt"), "w") as resfile:
+            for n_threads in threadsToTest:
                 results = []
                 for i in range(0, args.N):
                     for doSpec in [True, False]:
+                        print(f"Test: T:{n_threads} N:{i+1} S:{doSpec}")
                         results.append(runTest(args.fvl, args.fcpp, n_threads, doSpec))
                         resfile.write((f"s:" if doSpec else "") + f"{n_threads}={sum(results)/len(results)}\n")
+                        bar.update(i)
+                        i += 1
     
     # Plot
     doPlot()
