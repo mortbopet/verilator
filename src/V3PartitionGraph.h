@@ -79,8 +79,9 @@ private:
                                         // don't keep a pointer since the MTask will be removed)
 
     // If this MTask produces a variable which is speculated upon by other mtasks, these
-    // speculative mtasks are maintained in the following set.
-    std::set<ExecMTask*> m_downstreamSpecMTasks;
+    // speculative mtasks are maintained in the following set. We maintain as IDs rather than
+    // pointers, because MTasks may be trimmed off during constant propagation.
+    std::set<uint32_t> m_downstreamSpecMTaskIDs;
 
     ExecMTask* m_partnerSpecMTaskp
         = nullptr;  // Partner speculative MTask. Ie. if this MTask is the true branch of a
@@ -105,9 +106,11 @@ public:
         m_speculatesMtaskId = speculatesMtaskId;
         m_partnerSpecMTaskp = partnerSpecMTaskp;
     }
-    void addDownstreamSpeculativeTask(ExecMTask* mtaskp) { m_downstreamSpecMTasks.insert(mtaskp); }
-    const std::set<ExecMTask*>& downstreamSpeculativeMTasks() const {
-        return m_downstreamSpecMTasks;
+    void addDownstreamSpeculativeTask(uint32_t mtaskid) {
+        m_downstreamSpecMTaskIDs.insert(mtaskid);
+    }
+    const std::set<uint32_t>& downstreamSpeculativeMTasks() const {
+        return m_downstreamSpecMTaskIDs;
     }
     ExecMTask* partnerSpecMTaskp() const { return m_partnerSpecMTaskp; }
     Speculative speculative() const { return m_spec; }

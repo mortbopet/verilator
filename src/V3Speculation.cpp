@@ -97,6 +97,7 @@ private:
     AstMTaskBody* m_mtaskp;
     AstNodeModule* m_modp;
     int it = 0;
+    AstNodeIf* m_inIf = nullptr;
 
     // Maintain set of replaced functions. When deleting the speculated mtasks' tree, we are not
     // deleting the functions that we've replaced as well, so we have to track them separately.
@@ -186,6 +187,7 @@ private:
     }
 
     void visit(AstNodeIf* nodep) {
+        m_inIf = nodep;
         handleBranch(nodep, nodep->condp(), nodep->ifsp(), nodep->elsesp());
     }
 
@@ -194,6 +196,7 @@ private:
 
         // Only replace when we are not replacing a conditional expression
         if (m_s.specBoolVar && varp == m_s.specBoolVar) {
+            m_s.resolutionIf = m_inIf;
             replaceBool(varrefp, m_branch);
             return;
         }
@@ -303,8 +306,15 @@ void emitSpecResolution(AstMTaskBody* bodyp, ExecMTask* mtaskp, bool branch,
                                         new AstConst(condp->fileline(), V3Number(bodyp, 32, 1)),
                                         VL_BYTESIZE));
     }
-    bodyp->addStmtsp(new AstSpecResolveBool(s.cons->bodyp()->fileline(), mtaskp, condp,
-                                            genCommitSpecVarStmts(replacedVars)));
+
+    auto* resolvep = new AstSpecResolveBool(s.cons->bodyp()->fileline(), mtaskp, condp,
+                                            genCommitSpecVarStmts(replacedVars));
+
+    if (s.resolutionIf) {
+        s.resolutionIf->addIfsp(resolvep);
+    } else {
+        bodyp->addStmtsp(resolvep);
+    }
 }
 
 void loopDetect() {
@@ -368,8 +378,8 @@ void V3Speculation::doSpeculation(AstNodeModule* modp, Speculateable s) {
     consmtbodyp_t->execMTaskp(consmtp_t);
     consmtbodyp_f->execMTaskp(consmtp_f);
 
-    s.prod->addDownstreamSpeculativeTask(consmtp_t);
-    s.prod->addDownstreamSpeculativeTask(consmtp_f);
+    s.prod->addDownstreamSpeculativeTask(consmtp_t->id());
+    s.prod->addDownstreamSpeculativeTask(consmtp_f->id());
 
     // Inherit replaced MTasks' downstream tasks
     for (const auto& mtaskp : s.cons->downstreamSpeculativeMTasks()) {
