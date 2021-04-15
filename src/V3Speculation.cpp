@@ -296,7 +296,13 @@ void emitSpecResolution(AstMTaskBody* bodyp, ExecMTask* mtaskp, bool branch,
         assert(false);
     }
 
-    if (!branch) { condp = new AstNot(condp->fileline(), condp); }
+    if (!branch) {
+        // We are post V3Expand, so have to add CCast as well
+        condp = new AstAnd(condp->fileline(), new AstNot(condp->fileline(), condp),
+                           new AstCCast(condp->fileline(),
+                                        new AstConst(condp->fileline(), V3Number(bodyp, 32, 1)),
+                                        VL_BYTESIZE));
+    }
     bodyp->addStmtsp(new AstSpecResolveBool(s.cons->bodyp()->fileline(), mtaskp, condp,
                                             genCommitSpecVarStmts(replacedVars)));
 }
