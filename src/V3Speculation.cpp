@@ -97,7 +97,6 @@ private:
     AstMTaskBody* m_mtaskp;
     AstNodeModule* m_modp;
     int it = 0;
-    AstNodeIf* m_inIf = nullptr;
 
     // Maintain set of replaced functions. When deleting the speculated mtasks' tree, we are not
     // deleting the functions that we've replaced as well, so we have to track them separately.
@@ -127,7 +126,7 @@ private:
     }
 
     void visit(AstNode* nodep) {
-        assert(nodep->user1() == 0 && "!");
+        assert(nodep->user1() == 0 && "Already visited node");
         nodep->user1(1);
 
         iterateChildren(nodep);
@@ -171,14 +170,37 @@ private:
     // AstNodeCond and AstNodeIf don't inherit from the same parent, but have identical structure,
     // hmpfh...
     void handleBranch(AstNode* parent, AstNode* condp, AstNode* thenp, AstNode* elsep) {
+        AstNodeIf* parentIf = dynamic_cast<AstNodeIf*>(parent);
+        AstNodeCond* parentCond = dynamic_cast<AstNodeCond*>(parent);
+
         if (isSpeculatedCondExpr(condp)) {
             // Exchange parent with the branch corresponding to m_branch
             parent->replaceWith(m_branch ? thenp->cloneTree(false) : elsep->cloneTree(false));
             VL_DO_DANGLING(parent->deleteTree(), parent);
         } else {
             if (condp) iterate(condp);
-            if (thenp) iterate(thenp);
-            if (elsep) iterate(elsep);
+
+            // Iterate may have changed condp so update reference to it
+            condp = parentIf ? parentIf->condp() : parentCond->condp();
+
+            // Now constant-propagate the conditional branch after we've transformed the
+            // conditional expression. It may turn out, if condp is constant true or false, that we
+            // only execute one of the branches. This is important, because we only want to iterate
+            // through the code paths which are actually going to get executed. auto* condp_copy =
+            // condp->cloneTree(false);
+            auto* newCondp = V3Const::constifyEdit(condp->cloneTree(false));
+            if (auto* constp = dynamic_cast<AstConst*>(newCondp)) {
+                if (constp->toUInt()) {
+                    if (thenp) iterate(thenp);
+                } else {
+                    if (elsep) iterate(elsep);
+                }
+
+            } else {
+
+                if (thenp) iterate(thenp);
+                if (elsep) iterate(elsep);
+            }
         }
     }
 
@@ -187,7 +209,6 @@ private:
     }
 
     void visit(AstNodeIf* nodep) {
-        m_inIf = nodep;
         handleBranch(nodep, nodep->condp(), nodep->ifsp(), nodep->elsesp());
     }
 
@@ -196,7 +217,6 @@ private:
 
         // Only replace when we are not replacing a conditional expression
         if (m_s.specBoolVar && varp == m_s.specBoolVar) {
-            m_s.resolutionIf = m_inIf;
             replaceBool(varrefp, m_branch);
             return;
         }
@@ -290,6 +310,8 @@ AstNode* genCommitSpecVarStmts(const VarReplMapping& mapping) {
 void emitSpecResolution(AstMTaskBody* bodyp, ExecMTask* mtaskp, bool branch,
                         const Speculateable& s, VarReplMapping& replacedVars, string hierName) {
     AstNode* condp = nullptr;
+
+    // First, figure out the statement which must be checked before speculative resolution
     if (s.specBoolVar) {
         condp = new AstVarRef(s.specBoolVar->fileline(), s.specBoolVar, VAccess::READ);
         static_cast<AstVarRef*>(condp)->hiernameToProt(hierName);
@@ -299,22 +321,16 @@ void emitSpecResolution(AstMTaskBody* bodyp, ExecMTask* mtaskp, bool branch,
         assert(false);
     }
 
-    if (!branch) {
-        // We are post V3Expand, so have to add CCast as well
-        condp = new AstAnd(condp->fileline(), new AstNot(condp->fileline(), condp),
-                           new AstCCast(condp->fileline(),
-                                        new AstConst(condp->fileline(), V3Number(bodyp, 32, 1)),
-                                        VL_BYTESIZE));
-    }
+    // We are post V3Expand, so have to add CCast as well
+    condp = new AstAnd(condp->fileline(), branch ? condp : new AstNot(condp->fileline(), condp),
+                       new AstCCast(condp->fileline(),
+                                    new AstConst(condp->fileline(), V3Number(bodyp, 32, 1)),
+                                    VL_BYTESIZE));
 
     auto* resolvep = new AstSpecResolveBool(s.cons->bodyp()->fileline(), mtaskp, condp,
                                             genCommitSpecVarStmts(replacedVars));
 
-    if (s.resolutionIf) {
-        s.resolutionIf->addIfsp(resolvep);
-    } else {
-        bodyp->addStmtsp(resolvep);
-    }
+    bodyp->addStmtsp(resolvep);
 }
 
 void loopDetect() {
@@ -680,7 +696,29 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
     }
 
     // Go speculate!
-    for (const auto& s : speculateable) { doSpeculation(modp, s.second.at(0)); }
+    for (const auto& s : speculateable) {
+        auto& specs = *s.second.begin();
+
+        // Check whether the producing MTask is dangling. This is not pretty code and should be
+        // done better, but we're prototyping. This check is to ensure that the producing mtask of
+        // the variable is still within the execgraph. If it is not, we must assume that it was
+        // replaced (ie. due to speculation). We do not do nested speculation, so abort speculation
+        // here.
+        bool stillValid = false;
+        for (V3GraphVertex* vxp = mtasksp->verticesBeginp(); vxp; vxp = vxp->verticesNextp()) {
+            auto* mtaskp = dynamic_cast<ExecMTask*>(vxp);
+            if (mtaskp && mtaskp == specs.prod) {
+                stillValid = true;
+                break;
+            }
+        }
+        if (!stillValid) {
+            //
+            continue;
+        }
+
+        doSpeculation(modp, s.second.at(0));
+    }
 
     // Run constant propagation to clean up speculate partitions
     V3Const::constifyAll(v3Global.rootp());
