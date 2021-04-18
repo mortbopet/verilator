@@ -150,6 +150,14 @@ string AstNode::shortName() const {
     return pretty;
 }
 
+AstNodeSpecResolve::AstNodeSpecResolve(AstType t, FileLine* fl, ExecMTask* thisMTaskp,
+                                       AstNode* condp, AstNode* ifsp)
+    : AstNodeStmt(t, fl)
+    , m_thisMTaskp(thisMTaskp) {
+    setOp1p(condp);
+    addNOp2p(ifsp);
+}
+
 string AstNode::dedotName(const string& namein) {
     string pretty = namein;
     string::size_type pos;

@@ -2269,7 +2269,7 @@ public:
     VBranchPred branchPred() const { return m_branchPred; }
 };
 
-class AstNodeSpecResolve VL_NOT_FINAL : public AstNodeIf {
+class AstNodeSpecResolve VL_NOT_FINAL : public AstNodeStmt {
 private:
     /**
      * Maintain the MTask that this speculative node resides in.
@@ -2280,10 +2280,11 @@ private:
 
 public:
     AstNodeSpecResolve(AstType t, FileLine* fl, ExecMTask* thisMTaskp, AstNode* condp,
-                       AstNode* ifsp = nullptr, AstNode* elseptr = nullptr)
-        : AstNodeIf(t, fl, condp, ifsp, elseptr)
-        , m_thisMTaskp(thisMTaskp) {}
+                       AstNode* ifsp = nullptr);
     ExecMTask* thisMTask() const { return m_thisMTaskp; }
+    AstNode* condp() const { return op1p(); }  // op1 = condition
+    AstNode* ifsp() const { return op2p(); }  // op2 = list of true statements
+    void addIfsp(AstNode* newp) { addOp2p(newp); }
 };
 
 class AstNodeCase VL_NOT_FINAL : public AstNodeStmt {

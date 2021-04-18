@@ -4714,7 +4714,7 @@ class AstSpecResolveBool final : public AstNodeSpecResolve {
 private:
 public:
     AstSpecResolveBool(FileLine* fl, ExecMTask* thisMTaskp, AstNode* condp, AstNode* ifsp)
-        : ASTGEN_SUPER(fl, thisMTaskp, condp, ifsp, nullptr) {}
+        : ASTGEN_SUPER(fl, thisMTaskp, condp, ifsp) {}
     ASTNODE_NODE_FUNCS(SpecResolveBool)
 };
 
