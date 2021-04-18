@@ -827,12 +827,7 @@ public:
 
         // Then, figure out if this branch needs to commit
         puts("if (");
-        if (!nodep->branchPred().unknown()) {
-            puts(nodep->branchPred().ascii());
-            puts("(");
-        }
         iterateAndNextNull(nodep->condp());
-        if (!nodep->branchPred().unknown()) puts(")");
         puts(") {\n");
         iterateAndNextNull(nodep->ifsp());
 

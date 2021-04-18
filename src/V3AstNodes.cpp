@@ -252,6 +252,18 @@ void AstExecGraph::updateCritPath() {
     }
 }
 
+ExecMTask* AstExecGraph::idToExecMTaskp(uint32_t mtaskid) {
+    ExecMTask* mtaskp = nullptr;
+    for (V3GraphVertex* vxp = depGraphp()->verticesBeginp(); vxp; vxp = vxp->verticesNextp()) {
+        if (dynamic_cast<ExecMTask*>(vxp)->id() == mtaskid) {
+            mtaskp = static_cast<ExecMTask*>(vxp);
+            break;
+        }
+    }
+
+    return mtaskp;
+}
+
 void AstExecGraph::dumpDotFilePrefixed(const string& nameComment, const bool packed) const {
     if (v3Global.opt.dumpTree()) dumpDotFilePrefixedAlways(nameComment, packed);
 }
@@ -398,9 +410,12 @@ void AstExecGraph::dumpDotFile(const string& filename, const bool packed) const 
             }
 
             for (const auto& specDep : mtaskp->downstreamSpeculativeMTasks()) {
-                *logp << "  " << vxp->name() << " -> " << specDep->name()
-                      << "[color=\"purple\" style=\"dashed\"]"
-                      << "\n";
+                auto* execmtaskp = v3Global.rootp()->execGraphp()->idToExecMTaskp(specDep);
+                if (execmtaskp) {
+                    *logp << "  " << vxp->name() << " -> " << execmtaskp->name()
+                          << "[color=\"purple\" style=\"dashed\"]"
+                          << "\n";
+                }
             }
         }
     }

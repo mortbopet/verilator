@@ -59,8 +59,6 @@ struct Speculateable {
     ExecMTask* prod = nullptr;
     ExecMTask* cons = nullptr;
 
-    // If-node under which the speculative resolution is to be emitted (if conditional speculation)
-    AstNodeIf* resolutionIf = nullptr;
     bool isCondSpec() const { return condSpec.brExpr != nullptr; }
     bool isBoolSpec() const { return condSpec.brExpr == nullptr; }
 };

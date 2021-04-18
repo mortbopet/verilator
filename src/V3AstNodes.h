@@ -9234,6 +9234,8 @@ public:
     const ExecGraphCritPath& critPath() const { return m_critPath; }
     void updateCritPath();
 
+    ExecMTask* idToExecMTaskp(uint32_t mtaskid);
+
     // Debugging
     void dumpDotFile(const string& filename, const bool packed = true) const;
     void dumpDotFilePrefixed(const string& nameComment, const bool packed = true) const;
