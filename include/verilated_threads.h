@@ -135,7 +135,7 @@ public:
 
     inline void waitUntilUpstreamSpecDone(bool evenCycle) const {
         unsigned ct = 0;
-        while (VL_UNLIKELY(!areUpstreamDepsDone(evenCycle))) {
+        while (VL_UNLIKELY(!areUpstreamSpecDepsDone(evenCycle))) {
             VL_CPU_RELAX();
             ++ct;
             if (VL_UNLIKELY(ct > VL_LOCK_SPINS)) {
