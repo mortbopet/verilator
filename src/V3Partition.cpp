@@ -2099,10 +2099,12 @@ public:
         // Order the graph to make fanouts available
         m_mtasksp->orderPreRanked();
 
-        // Build initial ready list
+        // Build initial ready list. Speculative tasks are never ready, even if they don't have an
+        // incoming dependency "normal" dependency.
         for (V3GraphVertex* vxp = m_mtasksp->verticesBeginp(); vxp; vxp = vxp->verticesNextp()) {
             ExecMTask* mtaskp = dynamic_cast<ExecMTask*>(vxp);
-            if (vxp->inEmpty()) m_ready.insert(mtaskp);
+            if (vxp->inEmpty() && (mtaskp->speculative() == ExecMTask::Speculative::None))
+                m_ready.insert(mtaskp);
         }
 
         m_prevMTask.clear();
@@ -2128,10 +2130,14 @@ public:
             // else:
             //      schedule on a free thread
 
-            // Find dependent mtasks
+            // Find dependent mtasks (speculated mtasks are always dependent, even if they dont
+            // have any "normal" dependency inputs
             std::vector<ExecMTask*> dependentMTasks;
             std::copy_if(m_ready.begin(), m_ready.end(), std::back_inserter(dependentMTasks),
-                         [](const auto& mtaskp) { return !mtaskp->inEmpty(); });
+                         [](const auto& mtaskp) {
+                             return !mtaskp->inEmpty()
+                                    || (mtaskp->speculative() != ExecMTask::Speculative::None);
+                         });
             if (dependentMTasks.size() != 0) {
                 // Select highest priority mtask
                 bestMtaskp = *std::max_element(dependentMTasks.begin(), dependentMTasks.end(),
@@ -2143,10 +2149,20 @@ public:
                 // the selected mtask, and is available for execution. By doing so, we optimize for
                 // cache locality of the dependent variables, whilst minimizing the effects of
                 // imprecise task cost estimation.
+                // @note: here we do NOT consider speculative dependent MTasks because we don't
+                // want to schedule on the same thread (ie. after) the speculative MTask, given
+                // that would remove the whole point of speculation.
                 uint32_t latestDepFinTime = 0;
+
+                std::vector<ExecMTask*> depMTasks;
+                // Gather dependency mtasks + speculative dependency mtasks
                 for (V3GraphEdge* edgep = bestMtaskp->inBeginp(); edgep;
                      edgep = edgep->inNextp()) {
-                    ExecMTask* priorp = dynamic_cast<ExecMTask*>(edgep->fromp());
+                    ExecMTask* priorp = static_cast<ExecMTask*>(edgep->fromp());
+                    depMTasks.push_back(priorp);
+                }
+
+                for (auto* priorp : depMTasks) {
                     const uint32_t depEndTime = m_mtaskState[priorp].completionTime;
                     const uint32_t threadAvailableTime = m_busyUntil[priorp->thread()];
 
@@ -2199,12 +2215,22 @@ public:
             uint32_t bestEndTime = bestTime + bestMtaskp->cost();
             setCompletionTime(bestMtaskp, bestEndTime);
 
-            // Update the ready list
+            // Update the ready list based on the outgoing edges (speculative and non speculative)
+            // of the selected mtask)
             size_t erased = m_ready.erase(bestMtaskp);
             UASSERT_OBJ(erased > 0, bestMtaskp, "Should have erased something?");
+            std::vector<ExecMTask*> candidateReadyTasks;
             for (V3GraphEdge* edgeOutp = bestMtaskp->outBeginp(); edgeOutp;
                  edgeOutp = edgeOutp->outNextp()) {
-                ExecMTask* nextp = dynamic_cast<ExecMTask*>(edgeOutp->top());
+                candidateReadyTasks.push_back(dynamic_cast<ExecMTask*>(edgeOutp->top()));
+            }
+            for (auto id : bestMtaskp->downstreamSpeculativeMTasks()) {
+                auto* specMTaskp = v3Global.rootp()->execGraphp()->idToExecMTaskp(id);
+                assert(specMTaskp);
+                candidateReadyTasks.push_back(specMTaskp);
+            }
+
+            for (auto* nextp : candidateReadyTasks) {
 
                 UASSERT(nextp->thread() == 0xffffffff,
                         "Tasks after one being assigned should not be assigned yet");
@@ -2222,6 +2248,20 @@ public:
                         isReady = false;
                     }
                 }
+
+                if (nextp->speculative() != ExecMTask::Speculative::None) {
+                    for (auto& specDepId : nextp->upstreamSpeculativeDepMTasks()) {
+                        auto* specMTaskp
+                            = v3Global.rootp()->execGraphp()->idToExecMTaskp(specDepId);
+                        assert(specMTaskp);
+                        if (specMTaskp == bestMtaskp) continue;
+                        if (specMTaskp->thread() == 0xffffffff) {
+                            // This prior is not assigned yet
+                            isReady = false;
+                        }
+                    }
+                }
+
                 if (isReady) {
                     m_ready.insert(nextp);
                     UINFO(6, "Inserted " << nextp->name() << " into ready\n");
@@ -2649,10 +2689,6 @@ void V3Partition::finalize() {
 
     execGraphp->mutableDepGraphp()->dumpDotFilePrefixedAlways("dep_final");
     execGraphp->dumpDotFilePrefixedAlways("exec_final", false);
-    // v3Global.rootp()->dumpDotFilePrefixedAlways("exec_final");
-
-    //  AstDotDumper dotDumper(v3Global.rootp());
-    //  dotDumper.dumpDotFilePrefixedAlways("top");
 }
 
 void V3Partition::selfTest() {

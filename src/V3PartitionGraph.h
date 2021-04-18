@@ -78,6 +78,12 @@ private:
     unsigned m_speculatesMtaskId = -1;  // ID of original Mtask that this mtask speculates (we
                                         // don't keep a pointer since the MTask will be removed)
 
+    // If this metask is speculative, the following variable contains the IDs of the MTasks that
+    // produces the variable which this MTask speculates on. This can be multiple MTasks, given
+    // that it may speculate on a variable produced by other speculative MTasks, which in turn mean
+    // that it has a dependency on both of those MTasks.
+    std::set<uint32_t> m_upstreamSpeculativeDepMTasks;
+
     // If this MTask produces a variable which is speculated upon by other mtasks, these
     // speculative mtasks are maintained in the following set. We maintain as IDs rather than
     // pointers, because MTasks may be trimmed off during constant propagation.
@@ -111,6 +117,13 @@ public:
     }
     const std::set<uint32_t>& downstreamSpeculativeMTasks() const {
         return m_downstreamSpecMTaskIDs;
+    }
+
+    void addUpstreamSpeculativeDepMTasks(uint32_t id) {
+        m_upstreamSpeculativeDepMTasks.insert(id);
+    }
+    const std::set<uint32_t>& upstreamSpeculativeDepMTasks() const {
+        return m_upstreamSpeculativeDepMTasks;
     }
     ExecMTask* partnerSpecMTaskp() const { return m_partnerSpecMTaskp; }
     Speculative speculative() const { return m_spec; }
