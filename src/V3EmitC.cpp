@@ -851,8 +851,8 @@ public:
             if (mtaskp == nullptr) { continue; }
 
             assert(mtaskp->speculative() != ExecMTask::Speculative::None);
-            puts("vlTOPp->__Vm_mt_" + cvtToStr(mtaskp->id()) + ".signalUpstreamSpecDone("
-                 + cvtToStr(nodep->thisMTask()->id()) + ", even_cycle);\n");
+            puts("vlTOPp->__Vm_mt_" + cvtToStr(mtaskp->id())
+                 + ".signalUpstreamSpecDone(even_cycle);\n");
         }
 
         puts("}\n");
@@ -2818,7 +2818,6 @@ void EmitCImp::emitWrapEval(AstNodeModule* modp) {
     if (v3Global.opt.threads() == 1) {
         uint32_t mtaskId = 0;
         putsDecoration("// MTask " + cvtToStr(mtaskId) + " start\n");
-        puts("VL_DEBUG_IF(VL_DBG_MSGF(\"MTask" + cvtToStr(mtaskId) + " starting\\n\"););\n");
         puts("Verilated::mtaskId(" + cvtToStr(mtaskId) + ");\n");
     }
 
