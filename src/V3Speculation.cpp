@@ -725,6 +725,26 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
 
     // New mtasks were inserted, reassure order of graph
     mtasksp->order();
+
+    // Record upstream speculative dependencies; this allows for each speculative MTask to know
+    // which MTask produces the value of which they speculate on. This is done post-speculation,
+    // because downstream speculative mtask recording (during speculation) may be inherited by
+    // different MTasks, making the information only stable post-speculation.
+    updateUpstreamSpecInfo();
+}
+
+void V3Speculation::updateUpstreamSpecInfo() {
+    auto* mtasksp = v3Global.rootp()->execGraphp();
+
+    for (auto* vtxp = mtasksp->mutableDepGraphp()->verticesBeginp(); vtxp;
+         vtxp = vtxp->verticesNextp()) {
+        auto* mtaskp = static_cast<ExecMTask*>(vtxp);
+        for (const auto& did : mtaskp->downstreamSpeculativeMTasks()) {
+            auto* downstreammtaskp = mtasksp->idToExecMTaskp(did);
+            assert(downstreammtaskp);
+            downstreammtaskp->addUpstreamSpeculativeDepMTasks(mtaskp->id());
+        }
+    }
 }
 
 void V3Speculation::updateDataflowInfo(AstNodeModule* modp) {
