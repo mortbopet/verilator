@@ -134,10 +134,10 @@ private:
 
     void visit(AstNodeAssign* assignp) {
         auto* varrefp = dynamic_cast<AstVarRef*>(assignp->lhsp());
-        UASSERT(varrefp, "Assignment to non-variable?");
+        assert(varrefp && "Assignment to non-variable?");
         AstVar* prevarp = varrefp->varp();
         if (m_s.specBoolVar) {
-            UASSERT(prevarp != m_s.specBoolVar, "Assignment to variable we speculate on?");
+            assert(prevarp != m_s.specBoolVar && "Assignment to variable we speculate on?");
         }
 
         assignp->dump(cout);
@@ -694,6 +694,17 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
     for (auto& it : speculateable) {
         if (it.second.size() > 1) { it.second = {it.second.at(0)}; }
     }
+
+    // Filter speculateable consumers which are smaller than some fraction of an example cost
+    // of computational complexity
+    std::set<ExecMTask*> filterTooSmall;
+    constexpr double ratio = 2.5;
+    for (const auto& s : speculateable) {
+        if (s.first->cost() <= AstNode::instrCountCall() * ratio) {
+            filterTooSmall.insert(s.first);
+        }
+    }
+    for (const auto& toFilter : filterTooSmall) { speculateable.erase(toFilter); }
 
     // Go speculate!
     for (const auto& s : speculateable) {
