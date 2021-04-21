@@ -2105,6 +2105,12 @@ public:
             ExecMTask* mtaskp = dynamic_cast<ExecMTask*>(vxp);
             if (vxp->inEmpty() && (mtaskp->speculative() == ExecMTask::Speculative::None))
                 m_ready.insert(mtaskp);
+
+            // Reset thread data
+            mtaskp->thread(-1);
+            mtaskp->startTime(-1);
+            mtaskp->endTime(-1);
+            mtaskp->packNextp(nullptr);
         }
 
         m_prevMTask.clear();
@@ -2665,27 +2671,32 @@ void V3Partition::finalize() {
     AstExecGraph* execGraphp = v3Global.rootp()->execGraphp();
     UASSERT(execGraphp, "Couldn't find AstExecGraph singleton.");
 
-    if (v3Global.opt.speculate()) {
-        AstDotDumper dump2(v3Global.rootp());
-        dump2.dumpDotFilePrefixedAlways("top_pre_spec");
+    for (int round = 0; round < 2; round++) {
+
+        if (round > 0) {
+            if (v3Global.opt.speculate()) {
+                AstDotDumper dump2(v3Global.rootp());
+                dump2.dumpDotFilePrefixedAlways("top_pre_spec");
+                finalizeCosts(execGraphp->mutableDepGraphp());
+                V3Speculation spec;
+            }
+        }
+
+        // Back in V3Order, we partitioned mtasks using provisional cost
+        // estimates. However, V3Order precedes some optimizations (notably
+        // V3LifePost) that can change the cost of logic within each mtask.
+        // Now that logic is final, recompute the cost and priority of each
+        // ExecMTask.
         finalizeCosts(execGraphp->mutableDepGraphp());
-        V3Speculation spec;
+
+        // "Pack" the mtasks: statically associate each mtask with a thread,
+        // and determine the order in which each thread will runs its mtasks.
+        PartPackMTasks(execGraphp->mutableDepGraphp()).go();
+
+        // With all mtasks scheduled, we now update the critical path
+        // estimate of the AstExecGraph.
+        execGraphp->updateCritPath();
     }
-
-    // Back in V3Order, we partitioned mtasks using provisional cost
-    // estimates. However, V3Order precedes some optimizations (notably
-    // V3LifePost) that can change the cost of logic within each mtask.
-    // Now that logic is final, recompute the cost and priority of each
-    // ExecMTask.
-    finalizeCosts(execGraphp->mutableDepGraphp());
-
-    // "Pack" the mtasks: statically associate each mtask with a thread,
-    // and determine the order in which each thread will runs its mtasks.
-    PartPackMTasks(execGraphp->mutableDepGraphp()).go();
-
-    // With all mtasks scheduled, we now update the critical path
-    // estimate of the AstExecGraph.
-    execGraphp->updateCritPath();
 
     execGraphp->mutableDepGraphp()->dumpDotFilePrefixedAlways("dep_final");
     execGraphp->dumpDotFilePrefixedAlways("exec_final", false);
