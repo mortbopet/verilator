@@ -74,7 +74,7 @@ class VlMTaskVertex final {
     // use 16-bit types here...)
     std::atomic<vluint32_t> m_upstreamDepsDone;
     const vluint32_t m_upstreamDepCount;
-    std::atomic<vluint32_t> m_upstreamSpecDepsDone;
+    vluint32_t m_upstreamSpecDepsDone;
     const vluint32_t m_upstreamSpecDepCount;
 
 public:
@@ -125,6 +125,7 @@ public:
     }
 
     inline void signalUpstreamSpecDone(bool evenCycle) {
+        assert(evenCycle ? (m_upstreamSpecDepsDone == 0) : (m_upstreamSpecDepsDone == 1));
         m_upstreamSpecDepsDone += evenCycle ? 1 : -1;
     }
 
