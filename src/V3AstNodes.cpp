@@ -377,9 +377,8 @@ void AstExecGraph::dumpDotFile(const string& filename, const bool packed) const 
         string color = " ";
         if (onCP && false) {
             color += "color=\"red\"";
-        } else if (mtaskp->speculative() != ExecMTask::Speculative::None) {
-            color += mtaskp->speculative() == ExecMTask::Speculative::True ? "color=\"green\""
-                                                                           : "color=\"blue\"";
+        } else if (mtaskp->speculative()) {
+            color += mtaskp->speculative().value() ? "color=\"green\"" : "color=\"blue\"";
         }
 
         *logp << "  " << mtaskp->name() << " [" << label << color << " width=" << nodeWidth

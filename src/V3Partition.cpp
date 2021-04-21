@@ -2103,8 +2103,7 @@ public:
         // incoming dependency "normal" dependency.
         for (V3GraphVertex* vxp = m_mtasksp->verticesBeginp(); vxp; vxp = vxp->verticesNextp()) {
             ExecMTask* mtaskp = dynamic_cast<ExecMTask*>(vxp);
-            if (vxp->inEmpty() && (mtaskp->speculative() == ExecMTask::Speculative::None))
-                m_ready.insert(mtaskp);
+            if (vxp->inEmpty() && !mtaskp->speculative()) { m_ready.insert(mtaskp); }
 
             // Reset thread data
             mtaskp->thread(-1);
@@ -2139,11 +2138,9 @@ public:
             // Find dependent mtasks (speculated mtasks are always dependent, even if they dont
             // have any "normal" dependency inputs
             std::vector<ExecMTask*> dependentMTasks;
-            std::copy_if(m_ready.begin(), m_ready.end(), std::back_inserter(dependentMTasks),
-                         [](const auto& mtaskp) {
-                             return !mtaskp->inEmpty()
-                                    || (mtaskp->speculative() != ExecMTask::Speculative::None);
-                         });
+            std::copy_if(
+                m_ready.begin(), m_ready.end(), std::back_inserter(dependentMTasks),
+                [](const auto& mtaskp) { return !mtaskp->inEmpty() || mtaskp->speculative(); });
             if (dependentMTasks.size() != 0) {
                 // Select highest priority mtask
                 bestMtaskp = *std::max_element(dependentMTasks.begin(), dependentMTasks.end(),
@@ -2255,7 +2252,7 @@ public:
                     }
                 }
 
-                if (nextp->speculative() != ExecMTask::Speculative::None) {
+                if (nextp->speculative()) {
                     for (auto& specDepId : nextp->upstreamSpeculativeDepMTasks()) {
                         auto* specMTaskp
                             = v3Global.rootp()->execGraphp()->idToExecMTaskp(specDepId);

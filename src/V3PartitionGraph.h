@@ -24,6 +24,7 @@
 #include "V3OrderGraph.h"
 
 #include <list>
+#include <optional>
 
 //*************************************************************************
 // MTasks and graph structures
@@ -74,7 +75,7 @@ private:
     // or 0xffffffff if not yet assigned.
     const ExecMTask* m_packNextp = nullptr;  // Next for static (pack_mtasks) scheduling
     bool m_threadRoot = false;  // Is root thread
-    Speculative m_spec = Speculative::None;  // is speculative
+    std::optional<bool> m_spec;  // Speculated branch, if any
     unsigned m_speculatesMtaskId = -1;  // ID of original Mtask that this mtask speculates (we
                                         // don't keep a pointer since the MTask will be removed)
 
@@ -95,10 +96,10 @@ private:
     VL_UNCOPYABLE(ExecMTask);
 
     string specSuffix() const {
-        switch (m_spec) {
-        case Speculative::None: return "";
-        case Speculative::True: return "__SPEC__t_" + cvtToStr(m_speculatesMtaskId);
-        case Speculative::False: return "__SPEC__f_" + cvtToStr(m_speculatesMtaskId);
+        if (m_spec) {
+            return (m_spec.value() ? "__SPEC__t_" : "__SPEC__f_") + cvtToStr(m_speculatesMtaskId);
+        } else {
+            return "";
         }
     }
 
@@ -107,11 +108,15 @@ public:
         : AbstractMTask{graphp}
         , m_bodyp{bodyp}
         , m_id{id} {}
-    void speculative(Speculative spec, unsigned speculatesMtaskId, ExecMTask* partnerSpecMTaskp) {
-        m_spec = spec;
+    void speculative(bool specBranch, unsigned speculatesMtaskId) {
+        m_spec = specBranch;
         m_speculatesMtaskId = speculatesMtaskId;
+    }
+    ExecMTask* partnerSpecMTask() { return m_partnerSpecMTaskp; }
+    void partnerSpecMTask(ExecMTask* partnerSpecMTaskp) {
         m_partnerSpecMTaskp = partnerSpecMTaskp;
     }
+
     void addDownstreamSpeculativeTask(uint32_t mtaskid) {
         m_downstreamSpecMTaskIDs.insert(mtaskid);
     }
@@ -126,7 +131,7 @@ public:
         return m_upstreamSpeculativeDepMTasks;
     }
     ExecMTask* partnerSpecMTaskp() const { return m_partnerSpecMTaskp; }
-    Speculative speculative() const { return m_spec; }
+    std::optional<bool> speculative() const { return m_spec; }
     unsigned specMTaskId() const { return m_speculatesMtaskId; }
     AstMTaskBody* bodyp() const { return m_bodyp; }
     virtual uint32_t id() const override { return m_id; }

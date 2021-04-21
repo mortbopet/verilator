@@ -850,7 +850,7 @@ public:
             auto* mtaskp = v3Global.rootp()->execGraphp()->idToExecMTaskp(mtaskid);
             if (mtaskp == nullptr) { continue; }
 
-            assert(mtaskp->speculative() != ExecMTask::Speculative::None);
+            assert(mtaskp->speculative());
             puts("vlTOPp->__Vm_mt_" + cvtToStr(mtaskp->id())
                  + ".signalUpstreamSpecDone(even_cycle);\n");
         }
@@ -1472,10 +1472,7 @@ class EmitCImp final : EmitCStmts {
         uint32_t result = 0;
         for (V3GraphEdge* edgep = mtaskp->inBeginp(); edgep; edgep = edgep->inNextp()) {
             const ExecMTask* prevp = dynamic_cast<ExecMTask*>(edgep->fromp());
-            if ((prevp->thread() != mtaskp->thread())
-                || (prevp->speculative() != ExecMTask::Speculative::None)) {
-                ++result;
-            }
+            if ((prevp->thread() != mtaskp->thread()) || prevp->speculative()) { ++result; }
         }
         return result;
     }
@@ -1516,7 +1513,7 @@ class EmitCImp final : EmitCStmts {
 
         // Only signal upstream done if non-speculative. If speculative, this is handled
         // post-computation in the specResolve nodes.
-        if (curExecMTaskp->speculative() == ExecMTask::Speculative::None) {
+        if (!curExecMTaskp->speculative()) {
             // For any downstream mtask that's on another thread, bump its
             // counter and maybe notify it.
             for (V3GraphEdge* edgep = curExecMTaskp->outBeginp(); edgep;
@@ -1536,7 +1533,7 @@ class EmitCImp final : EmitCStmts {
                 auto* mtaskp = v3Global.rootp()->execGraphp()->idToExecMTaskp(mtaskid);
                 if (mtaskp == nullptr) { continue; }
 
-                assert(mtaskp->speculative() != ExecMTask::Speculative::None);
+                assert(mtaskp->speculative());
                 puts("vlTOPp->__Vm_mt_" + cvtToStr(mtaskp->id())
                      + ".signalUpstreamSpecDone(even_cycle);\n");
             }
@@ -2458,7 +2455,7 @@ void EmitCImp::emitMTaskVertexCtors(bool* firstp) {
     unsigned finalEdgesInCt = 0;
     for (const V3GraphVertex* vxp = depGraphp->verticesBeginp(); vxp; vxp = vxp->verticesNextp()) {
         const ExecMTask* mtp = dynamic_cast<const ExecMTask*>(vxp);
-        const bool isSpeculative = mtp->speculative() != ExecMTask::Speculative::None;
+        const bool isSpeculative = mtp->speculative().has_value();
         unsigned edgesInCt = packedMTaskMayBlock(mtp);
         if (packedMTaskMayBlock(mtp) > 0 || isSpeculative) {
             emitCtorSep(firstp);
@@ -3131,7 +3128,7 @@ void EmitCImp::emitMTaskState() {
         const ExecMTask* mtp = dynamic_cast<const ExecMTask*>(vxp);
         // @SPECUPDATE: A speculative MTask always needs its mtaskvertex emitted so we are able to
         // signal it when its speculated variable is ready.
-        if (packedMTaskMayBlock(mtp) > 0 || (mtp->speculative() != ExecMTask::Speculative::None)) {
+        if (packedMTaskMayBlock(mtp) > 0 || mtp->speculative()) {
             puts("VlMTaskVertex __Vm_mt_" + cvtToStr(mtp->id()) + ";\n");
         }
     }

@@ -21,7 +21,7 @@
 #include "V3Graph.h"
 #include "V3Dataflow.h"
 
-struct VarReplInfo {
+struct VarReplacement {
     // Maintain point of assignment for cloning assignment attributes (fileline etc.)
     AstNodeAssign* assignp = nullptr;
 
@@ -30,9 +30,13 @@ struct VarReplInfo {
 
     // Replacement variable
     AstVar* replvarp = nullptr;
+
+    // Maintain new source MTask for variable
+    ExecMTask* replProducer;
 };
 
-using VarReplMapping = std::unordered_map<AstVar*, VarReplInfo>;
+// Mapping from source variable to replaced variable info
+using VarReplMapping = std::unordered_map<AstVar*, VarReplacement>;
 
 struct CondSpeculateable {
     // Branch expression identified to be speculateable
@@ -62,6 +66,40 @@ struct Speculateable {
     bool isCondSpec() const { return condSpec.brExpr != nullptr; }
     bool isBoolSpec() const { return condSpec.brExpr == nullptr; }
 };
+
+struct MTaskReplacement {
+    ExecMTask* orignMTask;
+    ExecMTask* replMTask;
+
+    bool operator<(const MTaskReplacement& other) const {
+        return orignMTask < other.orignMTask && replMTask < other.replMTask;
+    }
+};
+
+struct BFSSpecRes {
+    bool branch;  // whether this result is related to a "true" or "false" speculation
+    VarReplMapping replacedVariables;
+    /**
+     * @brief replacedFunctions
+     * Set of replaced functions which have been replaced by speculated versions (to be removed)
+     */
+    std::set<AstCFunc*> replacedFunctions;
+    /**
+     * @brief replacedMTasks
+     * Set of mtasks which have been replaced by speculated versions.
+     */
+    std::set<MTaskReplacement> replacedMTasks;
+
+    BFSSpecRes& operator+=(const BFSSpecRes& other) {
+        this->replacedFunctions.insert(other.replacedFunctions.begin(),
+                                       other.replacedFunctions.end());
+        this->replacedMTasks.insert(other.replacedMTasks.begin(), other.replacedMTasks.end());
+        this->replacedVariables.insert(other.replacedVariables.begin(),
+                                       other.replacedVariables.end());
+        return *this;
+    }
+};
+
 using Speculateables = std::map<ExecMTask*, std::vector<Speculateable>>;
 class V3Speculation {
 public:
@@ -82,6 +120,12 @@ private:
     void gatherBoolVarSpecs(AstNodeModule* modp, Speculateables& speculateables);
     void gatherConditionalSpecs(AstNodeModule* modp, Speculateables& speculateables);
     bool isCriticalVariable(AstVar* varp, ExecMTask* consp);
+
+    BFSSpecRes bfsSpeculateRec(AstNodeModule* modp, Speculateable s, ExecMTask* consumer,
+                               VarReplMapping replacedVarMapping, bool speculatedBranch);
+    BFSSpecRes bfsSpeculate(AstNodeModule* modp, Speculateable s, bool speculatedBranch);
+    void speculate(AstNodeModule* modp, Speculateable s);
+    ExecMTask* createResolutionMTask(const BFSSpecRes& specRes, const Speculateable& s);
 
     /**
      * @brief removeDependency
