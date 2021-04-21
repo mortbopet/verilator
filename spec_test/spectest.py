@@ -10,7 +10,10 @@ from datetime import datetime
 from collections import defaultdict
 import progressbar
 
+from plotspectest import *
+
 RESULT_DIR = os.path.join(os.curdir, "spec_results")
+RESFILEPATH = ""
 VERILATOR_THREAD_VAR = "VERILATOR_THREAD_CMD"
 VERILATOR_ROOT= os.environ["VERILATOR_ROOT"]
 
@@ -22,65 +25,16 @@ def ensureDir(dir):
     if not os.path.exists(dir):
         os.makedirs(dir)
 
-
-def doPlot():
-    runs = 0
-    values = []
-    tests = defaultdict(lambda: {})
-    splitter = re.compile(r"(s:)?(\d+)=([0-9]*[.]?[0-9]+)")
-
-    # Parse
-    for testname in os.listdir(RESULT_DIR):
-        with open(os.path.join(RESULT_DIR, testname)) as f:
-            for line in f.readlines():
-                res = re.match(splitter, line)
-                if res == None:
-                    print("Could not parse test output")
-                    sys.exit(1)
-                isSpec = res[1] != None
-                if isSpec not in tests[res[2]]:
-                    tests[res[2]][isSpec] = []
-                tests[res[2]][isSpec].append(float(res[3]))
-
-    # Average
-    for thread, inner in tests.items():
-        for isSpeculative, vals in inner.items():
-            runs = len(vals)
-            tests[thread][isSpeculative] = sum(vals)/len(vals)
-
-
-    labels = list(tests.keys())
-    x = np.arange(len(labels))  # the label locations
-    fig, ax = plt.subplots()
-
-    w = 0.8
-    width = w / len(labels)
-    i = 0
-
-    nonSpecValues = []
-    specValues = []
-    for threads in labels:
-        specValues.append(tests[threads][True])
-        nonSpecValues.append(tests[threads][False])
-
-    ax.bar(x - width/2, nonSpecValues, width, label="Normal")
-    ax.bar(x + width/2, specValues, width, label="Speculative")
-
-
-    ax.set_ylabel('Time [s]')
-    ax.set_xlabel('Threads [#]')
-    ax.set_title(f'Synthetic Test (avg. over {runs} runs)')
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels)
-    ax.legend()
-    fig.tight_layout()
-
-    plt.show()
-
-
-def runTest(vl_file, cpp_file, nthreads, speculate):
+def runTest(vl_file, cpp_file, nthreads, speculate, additionalArgs):
     # Compilation
-    pargs = [VERILATOR_EXEC, "--Mdir", OUT_DIR, "--no-skip-identical", "-o", "out", "--cc", f"--threads", f"{nthreads}", vl_file, "--exe", "--build", cpp_file]
+    pargs = [VERILATOR_EXEC,
+        "--Mdir", OUT_DIR,
+        "--no-skip-identical", "-o", "out",
+        "--cc", f"--threads", f"{nthreads}"]
+    if(additionalArgs != None):
+        pargs += additionalArgs.split(" ")
+
+    pargs += [vl_file, "--exe", "--build", cpp_file]
     if speculate:
         pargs.append("--speculate")
     process = subprocess.Popen(pargs, stdout=subprocess.PIPE)
@@ -119,6 +73,8 @@ if __name__ == "__main__":
                         help='verilog test file')
     parser.add_argument('--fcpp', type=str, default="new", required=True,
                         help='cpp test file')
+    parser.add_argument('--additional', type=str, default=None, required=False,
+                        help='Additonal arguments to pass to the verilator command line call')
     args = parser.parse_args()
 
     ensureDir(RESULT_DIR)
@@ -130,18 +86,19 @@ if __name__ == "__main__":
     nRuns = len(threadsToTest)*args.N*2
 
     # Run tests
-    i = 1
+    run = 0
+    RESFILEPATH = os.path.join(RESULT_DIR, f"{args.prefix}_{timestamp}.txt")
     with progressbar.ProgressBar(max_value=nRuns, redirect_stdout=True) as bar:
-        with open(os.path.join(RESULT_DIR, f"{args.prefix}_{timestamp}.txt"), "w") as resfile:
+        with open(RESFILEPATH, "w") as resfile:
             for n_threads in threadsToTest:
                 results = []
                 for i in range(0, args.N):
                     for doSpec in [True, False]:
-                        print(f"Test: T:{n_threads} N:{i+1} S:{doSpec}")
-                        results.append(runTest(args.fvl, args.fcpp, n_threads, doSpec))
+                        bar.update(run)
+                        run += 1
+                        print(f"Test: T:{n_threads} N:{i+1}/{args.N} S:{doSpec}")
+                        results.append(runTest(args.fvl, args.fcpp, n_threads, doSpec, args.additional))
                         resfile.write((f"s:" if doSpec else "") + f"{n_threads}={sum(results)/len(results)}\n")
-                        bar.update(i)
-                        i += 1
     
     # Plot
-    doPlot()
+    doPlot(RESFILEPATH)
