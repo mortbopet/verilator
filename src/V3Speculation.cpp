@@ -350,7 +350,9 @@ BFSSpecRes V3Speculation::bfsSpeculateRec(AstNodeModule* modp, Speculateable s,
 
         return specVisitor.specOutVars();
     };
+    // Add the output speculated variables to the set of variable replacement until now
     VarReplMapping specOutVars = performSpeculation(specBody, speculatedBranch);
+    res.replacedVariables.insert(specOutVars.begin(), specOutVars.end());
 
     // Create dependency edges for all incoming variables except the speculated boolean. We cannot
     // use the dependency graph here, due to transitive edge removal, and by the fact that the only
@@ -383,7 +385,7 @@ BFSSpecRes V3Speculation::bfsSpeculateRec(AstNodeModule* modp, Speculateable s,
 
         for (auto* prodp : newInEdges) {
             assert(prodp != consumer);
-            new V3GraphEdge(execGraphp->mutableDepGraphp(), prodp, consumer, 1);
+            new V3GraphEdge(execGraphp->mutableDepGraphp(), prodp, specMTask, 1);
         }
     }
 
@@ -404,20 +406,42 @@ BFSSpecRes V3Speculation::bfsSpeculateRec(AstNodeModule* modp, Speculateable s,
 BFSSpecRes V3Speculation::bfsSpeculate(AstNodeModule* modp, Speculateable s,
                                        bool speculatedBranch) {
 
-    std::queue<ExecMTask*> bfsMTaskQueue;
-    bfsMTaskQueue.push(s.cons);
-    VarReplMapping replacedVars;
+    // The task queue is a set of MTasks sorted on their rank. This is necessary to handle the case
+    // where
+    //  t1 -> t2 ----> t5
+    //    |-> t3->t4 ---^
+    // To ensure that t5 is not speculated into before all of its dependencies (t2,t3,t4) have been
+    // speculated.
+    // Also, compare on the pointers themselves to impose a strict weak ordering.
+    auto comp = [=](const auto& lhs, const auto& rhs) {
+        return (lhs->rank() <= rhs->rank()) && lhs != rhs;
+    };
+    std::set<ExecMTask*, decltype(comp)> bfsMTaskQueue(comp);
+    bfsMTaskQueue.insert(s.cons);
     BFSSpecRes specres;
+    std::set<ExecMTask*> speculated;
     while (!bfsMTaskQueue.empty()) {
-        ExecMTask* mtaskp = bfsMTaskQueue.front();
-        bfsMTaskQueue.pop();
-        specres += bfsSpeculateRec(modp, s, mtaskp, replacedVars, speculatedBranch);
+        ExecMTask* mtaskp = *bfsMTaskQueue.begin();
+        bfsMTaskQueue.erase(bfsMTaskQueue.begin());
+
+        if (debug()) { cout << endl << "Speculating into mtask " << mtaskp->name() << endl; }
+        if (debug()) { cout << "mtask stats: " << mtaskp->rank() << std::endl; }
+
+        specres += bfsSpeculateRec(modp, s, mtaskp, specres.replacedVariables, speculatedBranch);
+        speculated.insert(mtaskp);
         // Enqueue children
         for (V3GraphEdge* edgep = mtaskp->outBeginp(); edgep; edgep = edgep->outNextp()) {
             ExecMTask* toExecMTaskp = dynamic_cast<ExecMTask*>(edgep->top());
-            bfsMTaskQueue.push(toExecMTaskp);
+            auto cnt = bfsMTaskQueue.count(toExecMTaskp);
+            auto f = bfsMTaskQueue.find(toExecMTaskp);
+            if (bfsMTaskQueue.count(toExecMTaskp) > 0 || speculated.count(toExecMTaskp) > 0) {
+                continue;
+            }
+            if (debug()) { cout << "adding mtask to queue: " << toExecMTaskp->name() << endl; }
+            bfsMTaskQueue.insert(toExecMTaskp);
         }
     }
+    return specres;
 }
 
 void emitSpecResolution(AstMTaskBody* bodyp, bool branch, const Speculateable& s,
