@@ -100,8 +100,13 @@ DFGVertex* DFG::updateVarDFGSrc(AstNode* sourcep, AstVar* varp) {
 
 void DFG::visit(AstNodeAssign* nodep) {
     AstNodeVarRef* varrefp = dynamic_cast<AstNodeVarRef*>(nodep->lhsp());
-    if (varrefp == nullptr) { return; }
-    UASSERT(varrefp, "Assignment to non-variable?");
+    if (!varrefp) {
+        // Try word select...
+        auto* nodeselp = dynamic_cast<AstNodeSel*>(nodep->lhsp());
+        assert(nodeselp && "Assignment to non-variable?");
+        varrefp = dynamic_cast<AstVarRef*>(nodeselp->fromp());
+        assert(varrefp && "Non varref in word selection?");
+    }
 
     AstVar* varp = varrefp->varp();
 
