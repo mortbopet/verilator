@@ -1448,14 +1448,14 @@ class EmitCImp final : EmitCStmts {
     // Returns the number of cross-thread dependencies into mtaskp.
     // If >0, mtaskp must test whether its prereqs are done before starting,
     // and may need to block.
-    // @SPECUPDATE: Also increments # of dependecies if dependency is speculative and on the same
-    // thread.
-    // Also increments if
+    // @SPECUPDATE: Also increments # of dependecies if the previous mtask is a speculative
+    // resolution node, so the thread is able to wait in case one spec res node is on the same
+    // thread, and the other is on another thread.
     static uint32_t packedMTaskMayBlock(const ExecMTask* mtaskp) {
         uint32_t result = 0;
         for (V3GraphEdge* edgep = mtaskp->inBeginp(); edgep; edgep = edgep->inNextp()) {
             const ExecMTask* prevp = dynamic_cast<ExecMTask*>(edgep->fromp());
-            if ((prevp->thread() != mtaskp->thread()) || prevp->speculative()) { ++result; }
+            if ((prevp->thread() != mtaskp->thread()) || prevp->isSpecResNode()) { ++result; }
         }
         return result;
     }
@@ -1494,18 +1494,13 @@ class EmitCImp final : EmitCStmts {
         // Flush message queue
         puts("Verilated::endOfThreadMTask(vlSymsp->__Vm_evalMsgQp);\n");
 
-        // Only signal upstream done if non-speculative. If speculative, this is handled
-        // post-computation in the specResolve nodes.
-        if (!curExecMTaskp->speculative()) {
-            // For any downstream mtask that's on another thread, bump its
-            // counter and maybe notify it.
-            for (V3GraphEdge* edgep = curExecMTaskp->outBeginp(); edgep;
-                 edgep = edgep->outNextp()) {
-                const ExecMTask* nextp = dynamic_cast<ExecMTask*>(edgep->top());
-                if (nextp->thread() != curExecMTaskp->thread()) {
-                    puts("vlTOPp->__Vm_mt_" + cvtToStr(nextp->id())
-                         + ".signalUpstreamDone(even_cycle);\n");
-                }
+        // For any downstream mtask that's on another thread, bump its
+        // counter and maybe notify it.
+        for (V3GraphEdge* edgep = curExecMTaskp->outBeginp(); edgep; edgep = edgep->outNextp()) {
+            const ExecMTask* nextp = dynamic_cast<ExecMTask*>(edgep->top());
+            if (nextp->thread() != curExecMTaskp->thread()) {
+                puts("vlTOPp->__Vm_mt_" + cvtToStr(nextp->id())
+                     + ".signalUpstreamDone(even_cycle);\n");
             }
         }
 

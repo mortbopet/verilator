@@ -106,8 +106,6 @@ class V3Speculation {
 public:
     V3Speculation();
 
-    static void updateUpstreamSpecInfo();
-
 private:
     struct VarIO {
         std::set<AstVar*> ins;

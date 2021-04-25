@@ -2226,11 +2226,6 @@ public:
                  edgeOutp = edgeOutp->outNextp()) {
                 candidateReadyTasks.push_back(dynamic_cast<ExecMTask*>(edgeOutp->top()));
             }
-            for (auto id : bestMtaskp->downstreamSpeculativeMTasks()) {
-                auto* specMTaskp = v3Global.rootp()->execGraphp()->idToExecMTaskp(id);
-                assert(specMTaskp);
-                candidateReadyTasks.push_back(specMTaskp);
-            }
 
             for (auto* nextp : candidateReadyTasks) {
 
@@ -2248,19 +2243,6 @@ public:
                     if (priorp->thread() == 0xffffffff) {
                         // This prior is not assigned yet
                         isReady = false;
-                    }
-                }
-
-                if (nextp->speculative()) {
-                    for (auto& specDepId : nextp->upstreamSpeculativeDepMTasks()) {
-                        auto* specMTaskp
-                            = v3Global.rootp()->execGraphp()->idToExecMTaskp(specDepId);
-                        assert(specMTaskp);
-                        if (specMTaskp == bestMtaskp) continue;
-                        if (specMTaskp->thread() == 0xffffffff) {
-                            // This prior is not assigned yet
-                            isReady = false;
-                        }
                     }
                 }
 

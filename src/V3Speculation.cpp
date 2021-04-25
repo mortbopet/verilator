@@ -389,10 +389,10 @@ BFSSpecRes V3Speculation::bfsSpeculateRec(AstNodeModule* modp, Speculateable s,
             prodMTaskp = it->second;
         }
 
-        // If the variable is produced by a speculative task, also depend on the other companion
-        // speculative branch
-        if (prodMTaskp->partnerSpecMTaskp() != nullptr) {
-            newInEdges.push_back(prodMTaskp->partnerSpecMTaskp());
+        // If the variable is produced by a speculative resolution task, also depend on the other
+        // companion speculative branch
+        if (prodMTaskp->partnerSpecResMTask() != nullptr) {
+            newInEdges.push_back(prodMTaskp->partnerSpecResMTask());
         }
         newInEdges.push_back(prodMTaskp);
 
@@ -538,17 +538,11 @@ void V3Speculation::speculate(AstNodeModule* modp, Speculateable s) {
         }
     }
 
-    // Set all MTasks in each branch as speculative
-    for (auto& mtaskpair : replacementMTaskPairs) {
-        assert(mtaskpair.second.size() == 2);
-        auto* mt0 = mtaskpair.second.at(0);
-        auto* mt1 = mtaskpair.second.at(1);
-        mt0->partnerSpecMTask(mt1);
-        mt1->partnerSpecMTask(mt0);
-    }
-
     // resolve each speculated branch
-    for (const auto& res : {trueRes, falseRes}) { createResolutionMTask(res, s); }
+    auto* trueResolveMTask = createResolutionMTask(trueRes, s);
+    auto* falseResolveMTask = createResolutionMTask(falseRes, s);
+    trueResolveMTask->partnerSpecResMTask(falseResolveMTask);
+    falseResolveMTask->partnerSpecResMTask(trueResolveMTask);
 
     // Delete old MTasks + functions
     auto oldFuncs = trueRes.replacedFunctions;
@@ -968,26 +962,6 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
 
     // New mtasks were inserted, reassure order of graph
     mtasksp->order();
-
-    // Record upstream speculative dependencies; this allows for each speculative MTask to know
-    // which MTask produces the value of which they speculate on. This is done post-speculation,
-    // because downstream speculative mtask recording (during speculation) may be inherited by
-    // different MTasks, making the information only stable post-speculation.
-    updateUpstreamSpecInfo();
-}
-
-void V3Speculation::updateUpstreamSpecInfo() {
-    auto* mtasksp = v3Global.rootp()->execGraphp();
-
-    for (auto* vtxp = mtasksp->mutableDepGraphp()->verticesBeginp(); vtxp;
-         vtxp = vtxp->verticesNextp()) {
-        auto* mtaskp = static_cast<ExecMTask*>(vtxp);
-        for (const auto& did : mtaskp->downstreamSpeculativeMTasks()) {
-            auto* downstreammtaskp = mtasksp->idToExecMTaskp(did);
-            assert(downstreammtaskp);
-            downstreammtaskp->addUpstreamSpeculativeDepMTasks(mtaskp->id());
-        }
-    }
 }
 
 void V3Speculation::updateDataflowInfo(AstNodeModule* modp) {
