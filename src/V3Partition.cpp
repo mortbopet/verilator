@@ -2288,6 +2288,12 @@ public:
             m_prevMTask[bestTh] = bestMtaskp;
             m_busyUntil[bestTh] = bestEndTime;
         }
+
+        // Sanity check
+        for (V3GraphVertex* vxp = m_mtasksp->verticesBeginp(); vxp; vxp = vxp->verticesNextp()) {
+            ExecMTask* mtaskp = dynamic_cast<ExecMTask*>(vxp);
+            assert(mtaskp->startTime() != 0xFFFFFFFF && mtaskp->endTime() != 0xFFFFFFFF);
+        }
     }
 
     // SELF TEST
