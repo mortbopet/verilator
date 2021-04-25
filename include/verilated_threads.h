@@ -74,8 +74,6 @@ class VlMTaskVertex final {
     // use 16-bit types here...)
     std::atomic<vluint32_t> m_upstreamDepsDone;
     const vluint32_t m_upstreamDepCount;
-    vluint32_t m_upstreamSpecDepsDone;
-    const vluint32_t m_upstreamSpecDepCount;
 
 public:
     // CONSTRUCTORS
@@ -83,7 +81,7 @@ public:
     // 'upstreamDepCount' is the number of upstream MTaskVertex's
     // that must notify this MTaskVertex before it will become ready
     // to run.
-    explicit VlMTaskVertex(vluint32_t upstreamDepCount, vluint32_t upstreamSpecDepCount);
+    explicit VlMTaskVertex(vluint32_t upstreamDepCount);
     ~VlMTaskVertex() = default;
 
     static vluint64_t yields() { return s_yields; }
@@ -115,28 +113,6 @@ public:
     inline void waitUntilUpstreamDone(bool evenCycle) const {
         unsigned ct = 0;
         while (VL_UNLIKELY(!areUpstreamDepsDone(evenCycle))) {
-            VL_CPU_RELAX();
-            ++ct;
-            if (VL_UNLIKELY(ct > VL_LOCK_SPINS)) {
-                ct = 0;
-                yieldThread();
-            }
-        }
-    }
-
-    inline void signalUpstreamSpecDone(bool evenCycle) {
-        assert(evenCycle ? (m_upstreamSpecDepsDone == 0) : (m_upstreamSpecDepsDone == 1));
-        m_upstreamSpecDepsDone += evenCycle ? 1 : -1;
-    }
-
-    inline bool areUpstreamSpecDepsDone(bool evenCycle) const {
-        vluint32_t target = evenCycle ? m_upstreamSpecDepCount : 0;
-        return m_upstreamSpecDepsDone == target;
-    }
-
-    inline void waitUntilUpstreamSpecDone(bool evenCycle) const {
-        unsigned ct = 0;
-        while (VL_UNLIKELY(!areUpstreamSpecDepsDone(evenCycle))) {
             VL_CPU_RELAX();
             ++ct;
             if (VL_UNLIKELY(ct > VL_LOCK_SPINS)) {

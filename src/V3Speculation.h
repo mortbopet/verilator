@@ -72,10 +72,9 @@ struct MTaskReplacement {
     ExecMTask* replMTask;
 
     bool operator<(const MTaskReplacement& other) const {
-        return orignMTask < other.orignMTask && replMTask < other.replMTask;
+        return std::pair(orignMTask, replMTask) < std::pair(other.orignMTask, other.replMTask);
     }
 };
-
 struct BFSSpecRes {
     bool branch;  // whether this result is related to a "true" or "false" speculation
     VarReplMapping replacedVariables;
@@ -98,6 +97,8 @@ struct BFSSpecRes {
                                        other.replacedVariables.end());
         return *this;
     }
+
+    friend std::ostream& operator<<(std::ostream& os, const BFSSpecRes& res);
 };
 
 using Speculateables = std::map<ExecMTask*, std::vector<Speculateable>>;

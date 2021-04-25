@@ -2099,11 +2099,10 @@ public:
         // Order the graph to make fanouts available
         m_mtasksp->orderPreRanked();
 
-        // Build initial ready list. Speculative tasks are never ready, even if they don't have an
-        // incoming dependency "normal" dependency.
+        // Build initial ready list.
         for (V3GraphVertex* vxp = m_mtasksp->verticesBeginp(); vxp; vxp = vxp->verticesNextp()) {
             ExecMTask* mtaskp = dynamic_cast<ExecMTask*>(vxp);
-            if (vxp->inEmpty() && !mtaskp->speculative()) { m_ready.insert(mtaskp); }
+            if (vxp->inEmpty()) { m_ready.insert(mtaskp); }
 
             // Reset thread data
             mtaskp->thread(-1);
@@ -2699,10 +2698,9 @@ void V3Partition::finalize() {
         // With all mtasks scheduled, we now update the critical path
         // estimate of the AstExecGraph.
         execGraphp->updateCritPath();
+        execGraphp->mutableDepGraphp()->dumpDotFilePrefixedAlways("dep");
+        execGraphp->dumpDotFilePrefixedAlways("exec", false);
     }
-
-    execGraphp->mutableDepGraphp()->dumpDotFilePrefixedAlways("dep_final");
-    execGraphp->dumpDotFilePrefixedAlways("exec_final", false);
 }
 
 void V3Partition::selfTest() {

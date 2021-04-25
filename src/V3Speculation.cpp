@@ -26,6 +26,15 @@
 //######################################################################
 // SpeculationReplaceVisitor
 
+std::ostream& operator<<(std::ostream& os, const BFSSpecRes& res) {
+    os << "Replaced MTasks" << endl;
+    for (const auto& mtaskp : res.replacedMTasks) {
+        os << "\t" << mtaskp.orignMTask->name() << " -> " << mtaskp.replMTask->name() << endl;
+    }
+
+    return os;
+}
+
 inline string specNameSuffix(bool branch) { return "__SPEC__" + string(branch ? "t" : "f"); }
 
 inline void replaceBool(AstNode* oldp, bool value) {
@@ -135,7 +144,6 @@ private:
     void visit(AstNodeAssign* assignp) {
         auto* varrefp = dynamic_cast<AstVarRef*>(assignp->lhsp());
         if (!varrefp) {
-            AstDotDumper(assignp).dumpDotFilePrefixedAlways("brokennode");
             // Try word select...
             auto* nodeselp = dynamic_cast<AstNodeSel*>(assignp->lhsp());
             assert(nodeselp && "Assignment to non-variable?");
@@ -147,19 +155,23 @@ private:
             assert(prevarp != m_s.specBoolVar && "Assignment to variable we speculate on?");
         }
 
-        // Find (or construct) speculative output variable
-        auto replVarp = m_specOutVars.find(prevarp);
-        if (replVarp == m_specOutVars.end()) {
-            AstVar* specVarp = prevarp->cloneTree(false);
-            specVarp->name(specVarp->name() + nameSuffix());
-            m_modp->addStmtp(specVarp);
-            replVarp = m_specOutVars.insert(
-                m_specOutVars.end(),
-                {prevarp, VarReplacement{assignp, varrefp, specVarp, m_mtaskp->execMTaskp()}});
-        }
+        // Speculate any variable type but temporary statement variables (no need to speculate
+        // these, they are stack-allocated local to the statement scope.
+        if (prevarp->varType() != AstVarType::STMTTEMP) {
+            // Find (or construct) speculative output variable
+            auto replVarp = m_specOutVars.find(prevarp);
+            if (replVarp == m_specOutVars.end()) {
+                AstVar* specVarp = prevarp->cloneTree(false);
+                specVarp->name(specVarp->name() + nameSuffix());
+                m_modp->addStmtp(specVarp);
+                replVarp = m_specOutVars.insert(
+                    m_specOutVars.end(),
+                    {prevarp, VarReplacement{assignp, varrefp, specVarp, m_mtaskp->execMTaskp()}});
+            }
 
-        // And replace
-        varrefp->varp(replVarp->second.replvarp);
+            // And replace
+            varrefp->varp(replVarp->second.replvarp);
+        }
 
         visit(static_cast<AstNode*>(assignp));
     }
@@ -359,7 +371,8 @@ BFSSpecRes V3Speculation::bfsSpeculateRec(AstNodeModule* modp, Speculateable s,
     // remaining dependency edge in the graph is the actual boolean which we are currently
     // speculating on.
     // @todo: Only create edge if actual dependency (ie. avoid loops, we need topological sort)
-    for (const auto& invarp : m_io.at(modp).at(consumer).ins) {
+    auto& ioForConsumer = m_io.at(modp).at(consumer).ins;
+    for (const auto& invarp : ioForConsumer) {
         if (s.specVars.count(invarp) != 0) continue;
         if (invarp->varType() == AstVarType::PORT) continue;
 
@@ -481,24 +494,38 @@ ExecMTask* V3Speculation::createResolutionMTask(const BFSSpecRes& specRes,
     // Resolution body; just find any fileline at this point...
     auto* bodyp = new AstMTaskBody(specRes.replacedMTasks.begin()->orignMTask->fileline());
     auto* mtaskp = new ExecMTask(execGraphp->mutableDepGraphp(), bodyp, m_nextMTaskID++);
+    mtaskp->speculative(specRes.branch, s.cons->id());
+    bodyp->execMTaskp(mtaskp);
 
     // Emit variable resolution
     emitSpecResolution(bodyp, specRes.branch, s, specRes.replacedVariables, scopeName);
 
     for (const auto& repl : specRes.replacedMTasks) {
         // Create an incoming edge from all replaced MTasks. transistive edge removal will keep the
-        // most significant ones.
+        // most significant ones. This is to ensure that the speculative resolution task is the
+        // last to execute
         new V3GraphEdge(execGraphp->mutableDepGraphp(), repl.replMTask, mtaskp, 1);
-
-        // The commit node should inherit replaced MTasks' downstream speculative tasks
-        for (const auto& downstreamp : repl.orignMTask->downstreamSpeculativeMTasks()) {
-            mtaskp->addDownstreamSpeculativeTask(downstreamp);
-        }
     }
+
+    // Finally, create an edge from the producer of the speculated variable to the speculative
+    // resolution node, to guard commitment on the speculated variable being available.
+    new V3GraphEdge(execGraphp->mutableDepGraphp(), s.prod, mtaskp, 1);
+
+    return mtaskp;
 }
 
 void V3Speculation::speculate(AstNodeModule* modp, Speculateable s) {
     auto* execGraphp = v3Global.rootp()->execGraphp();
+
+    // Before speculating MTasks, perform replacement of conditional expression. This method will
+    // replace the conditional expr with a temporary variable. This variable will then be replaced
+    // by SpeculativeReplaceVisitor.
+    if (s.isCondSpec()) {
+        SpecCondExprReplaceVisitor specExprVisitor(s.cons->bodyp(), s);
+        s.condSpec.dummyVar = specExprVisitor.dummyVar();
+        s.condSpec.condExpr = specExprVisitor.condExpr();
+        assert(s.condSpec.condExpr && s.condSpec.dummyVar);
+    }
 
     auto trueRes = bfsSpeculate(modp, s, true);
     auto falseRes = bfsSpeculate(modp, s, false);
@@ -520,15 +547,22 @@ void V3Speculation::speculate(AstNodeModule* modp, Speculateable s) {
         mt1->partnerSpecMTask(mt0);
     }
 
+    // resolve each speculated branch
+    for (const auto& res : {trueRes, falseRes}) { createResolutionMTask(res, s); }
+
     // Delete old MTasks + functions
     auto oldFuncs = trueRes.replacedFunctions;
     oldFuncs.insert(falseRes.replacedFunctions.begin(), falseRes.replacedFunctions.end());
-    auto oldMTasks = trueRes.replacedMTasks;
-    oldMTasks.insert(falseRes.replacedMTasks.begin(), falseRes.replacedMTasks.end());
+    std::set<ExecMTask*> oldMTasks;
+    for (const auto& res : {trueRes, falseRes}) {
+        std::transform(res.replacedMTasks.begin(), res.replacedMTasks.end(),
+                       std::inserter(oldMTasks, oldMTasks.end()),
+                       [=](const auto& repl) { return repl.orignMTask; });
+    }
 
-    for (const auto& repl : oldMTasks) {
-        repl.orignMTask->bodyp()->unlinkFrBack()->deleteTree(), repl.orignMTask->bodyp();
-        repl.orignMTask->unlinkDelete(execGraphp->mutableDepGraphp());
+    for (const auto& oldMTaskp : oldMTasks) {
+        oldMTaskp->bodyp()->unlinkFrBack()->deleteTree(), oldMTaskp->bodyp();
+        oldMTaskp->unlinkDelete(execGraphp->mutableDepGraphp());
     }
 
     for (auto& specFunc : oldFuncs) { specFunc->unlinkFrBack()->deleteTree(); }
