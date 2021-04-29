@@ -1495,12 +1495,16 @@ class EmitCImp final : EmitCStmts {
         puts("Verilated::endOfThreadMTask(vlSymsp->__Vm_evalMsgQp);\n");
 
         // For any downstream mtask that's on another thread, bump its
-        // counter and maybe notify it.
-        for (V3GraphEdge* edgep = curExecMTaskp->outBeginp(); edgep; edgep = edgep->outNextp()) {
-            const ExecMTask* nextp = dynamic_cast<ExecMTask*>(edgep->top());
-            if (nextp->thread() != curExecMTaskp->thread()) {
-                puts("vlTOPp->__Vm_mt_" + cvtToStr(nextp->id())
-                     + ".signalUpstreamDone(even_cycle);\n");
+        // counter and maybe notify it. Skip if speculative resolution node (resolution logic
+        // handled during spec res node emission).
+        if (!curExecMTaskp->isSpecResNode()) {
+            for (V3GraphEdge* edgep = curExecMTaskp->outBeginp(); edgep;
+                 edgep = edgep->outNextp()) {
+                const ExecMTask* nextp = dynamic_cast<ExecMTask*>(edgep->top());
+                if (nextp->thread() != curExecMTaskp->thread()) {
+                    puts("vlTOPp->__Vm_mt_" + cvtToStr(nextp->id())
+                         + ".signalUpstreamDone(even_cycle);\n");
+                }
             }
         }
 

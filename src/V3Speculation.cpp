@@ -403,17 +403,13 @@ BFSSpecRes V3Speculation::bfsSpeculateRec(AstNodeModule* modp, Speculateable s,
         }
     }
 
-    /*
-    @ Todo: I am pretty sure this is automatically done when we create edges from input vars?
-    // The speculated mtasks should inherit the outgoing edges from their origin MTask
-    for (V3GraphEdge* edgep = s.cons->outBeginp(); edgep; edgep = edgep->outNextp()) {
+    // Collect downstream MTasks which depends on this mtask
+    for (V3GraphEdge* edgep = consumer->outBeginp(); edgep; edgep = edgep->outNextp()) {
         ExecMTask* toExecMTaskp = dynamic_cast<ExecMTask*>(edgep->top());
-        assert(consmtp_t != toExecMTaskp);
-        new V3GraphEdge(execGraphp->mutableDepGraphp(), consmtp_t, toExecMTaskp, 1);
-        assert(consmtp_f != toExecMTaskp);
-        new V3GraphEdge(execGraphp->mutableDepGraphp(), consmtp_f, toExecMTaskp, 1);
+        assert(toExecMTaskp);
+        res.downstreamMTasks.insert(toExecMTaskp);
     }
-    */
+
     return res;
 }
 
@@ -433,24 +429,49 @@ BFSSpecRes V3Speculation::bfsSpeculate(AstNodeModule* modp, Speculateable s,
     std::set<ExecMTask*, decltype(comp)> bfsMTaskQueue(comp);
     bfsMTaskQueue.insert(s.cons);
     BFSSpecRes specres;
+    specres.branch = speculatedBranch;
     std::set<ExecMTask*> speculated;
     while (!bfsMTaskQueue.empty()) {
         ExecMTask* mtaskp = *bfsMTaskQueue.begin();
         bfsMTaskQueue.erase(bfsMTaskQueue.begin());
 
+        // Do not speculate on tasks which have nonspeculative dependencies
+        auto toExecIns = m_dfgs.at(mtaskp)->ins();
+        bool nonSpecDep = false;
+        for (const auto& inVarp : toExecIns) {
+            const bool varProducedByMTask = m_varProducedBy.count(inVarp) != 0;
+
+            if (varProducedByMTask) {
+                ExecMTask* prodMTask = m_varProducedBy.at(inVarp);
+                const bool varAlreadyReplaced = specres.replacedVariables.count(inVarp) != 0;
+                const bool producerWillBeSpeculated = bfsMTaskQueue.count(prodMTask) != 0;
+                const bool producerIsOrigSpec = prodMTask == s.prod;
+
+                if (!(producerIsOrigSpec || varAlreadyReplaced || producerWillBeSpeculated)) {
+                    cout << "Will not speculate onto mt" << mtaskp->id()
+                         << " due to nonspec deps produced by " << m_varProducedBy.at(inVarp)->id()
+                         << endl;
+
+                    nonSpecDep = true;
+                    break;
+                }
+            }
+        }
+
+        if (nonSpecDep) { continue; }
+
         if (debug()) { cout << endl << "Speculating into mtask " << mtaskp->name() << endl; }
-        if (debug()) { cout << "mtask stats: " << mtaskp->rank() << std::endl; }
+        if (debug()) { cout << "mtask rank: " << mtaskp->rank() << std::endl; }
 
         specres += bfsSpeculateRec(modp, s, mtaskp, specres.replacedVariables, speculatedBranch);
         speculated.insert(mtaskp);
         // Enqueue children
         for (V3GraphEdge* edgep = mtaskp->outBeginp(); edgep; edgep = edgep->outNextp()) {
             ExecMTask* toExecMTaskp = dynamic_cast<ExecMTask*>(edgep->top());
-            auto cnt = bfsMTaskQueue.count(toExecMTaskp);
-            auto f = bfsMTaskQueue.find(toExecMTaskp);
             if (bfsMTaskQueue.count(toExecMTaskp) > 0 || speculated.count(toExecMTaskp) > 0) {
                 continue;
             }
+
             if (debug()) { cout << "adding mtask to queue: " << toExecMTaskp->name() << endl; }
             bfsMTaskQueue.insert(toExecMTaskp);
         }
@@ -544,6 +565,18 @@ void V3Speculation::speculate(AstNodeModule* modp, Speculateable s) {
     auto* falseResolveMTask = createResolutionMTask(falseRes, s);
     trueResolveMTask->partnerSpecResMTask(falseResolveMTask);
     falseResolveMTask->partnerSpecResMTask(trueResolveMTask);
+
+    // Add edges from speculative resolution nodes to mtasks downstream from the speculated
+    // sequence.
+    trueRes.updateDownstreamTasks();
+    falseRes.updateDownstreamTasks();
+    std::set<ExecMTask*> downstreamTasks = trueRes.downstreamMTasks;
+    downstreamTasks.insert(falseRes.downstreamMTasks.begin(), falseRes.downstreamMTasks.end());
+
+    for (const auto& mtaskp : downstreamTasks) {
+        new V3GraphEdge(execGraphp->mutableDepGraphp(), trueResolveMTask, mtaskp, 1);
+        new V3GraphEdge(execGraphp->mutableDepGraphp(), falseResolveMTask, mtaskp, 1);
+    }
 
     // Delete old MTasks + functions
     auto oldFuncs = trueRes.replacedFunctions;

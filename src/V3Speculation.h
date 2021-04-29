@@ -21,6 +21,8 @@
 #include "V3Graph.h"
 #include "V3Dataflow.h"
 
+#include <algorithm>
+
 struct VarReplacement {
     // Maintain point of assignment for cloning assignment attributes (fileline etc.)
     AstNodeAssign* assignp = nullptr;
@@ -89,13 +91,37 @@ struct BFSSpecRes {
      */
     std::set<MTaskReplacement> replacedMTasks;
 
+    /**
+     * @brief downstreamMTasks
+     * Set of MTasks which dependend on an mtask which was speculated.
+     * These MTasks now need an edge to the speculative resolution node of this speculation.
+     */
+    std::set<ExecMTask*> downstreamMTasks;
+
     BFSSpecRes& operator+=(const BFSSpecRes& other) {
         this->replacedFunctions.insert(other.replacedFunctions.begin(),
                                        other.replacedFunctions.end());
         this->replacedMTasks.insert(other.replacedMTasks.begin(), other.replacedMTasks.end());
         this->replacedVariables.insert(other.replacedVariables.begin(),
                                        other.replacedVariables.end());
+        this->downstreamMTasks.insert(other.downstreamMTasks.begin(),
+                                      other.downstreamMTasks.end());
+
         return *this;
+    }
+
+    /**
+     * @brief updateDownstreamTasks
+     * Removes any occurances of replacedMTasks in downstreanMTasks
+     */
+    void updateDownstreamTasks() {
+        std::set<ExecMTask*> replacedOrigMTasks;
+        for (const auto& mtaskp : replacedMTasks) { replacedOrigMTasks.insert(mtaskp.orignMTask); }
+        std::set<ExecMTask*> diff;
+        std::set_difference(downstreamMTasks.begin(), downstreamMTasks.end(),
+                            replacedOrigMTasks.begin(), replacedOrigMTasks.end(),
+                            std::inserter(diff, diff.begin()));
+        downstreamMTasks = diff;
     }
 
     friend std::ostream& operator<<(std::ostream& os, const BFSSpecRes& res);
