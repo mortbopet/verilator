@@ -268,10 +268,11 @@ private:
 
 public:
     explicit SpeculativeReplaceVisitor(AstNodeModule* modp, AstMTaskBody* bodyp, Speculateable& s,
-                                       bool branch)
+                                       VarReplMapping& replInVars, bool branch)
         : m_s(s)
         , m_branch(branch)
         , m_mtaskp(bodyp)
+        , m_specOutVars(replInVars)
         , m_modp(modp) {
         visit(bodyp);
     }
@@ -356,7 +357,7 @@ BFSSpecRes V3Speculation::bfsSpeculateRec(AstNodeModule* modp, Speculateable s,
     std::set<AstCFunc*> replacedFunctions;
     auto performSpeculation = [&](AstMTaskBody* mtaskbody, bool branch) {
         { AstDotDumper(mtaskbody).dumpDotFilePrefixedAlways("specbody"); }
-        SpeculativeReplaceVisitor specVisitor(modp, mtaskbody, s, branch);
+        SpeculativeReplaceVisitor specVisitor(modp, mtaskbody, s, res.replacedVariables, branch);
         res.replacedFunctions.insert(specVisitor.replacedFunctions().begin(),
                                      specVisitor.replacedFunctions().end());
 
