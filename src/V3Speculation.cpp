@@ -413,6 +413,10 @@ BFSSpecRes V3Speculation::bfsSpeculateRec(AstNodeModule* modp, Speculateable s,
     return res;
 }
 
+bool rankComparator(ExecMTask* lhs, ExecMTask* rhs) {
+    return (lhs->rank() <= rhs->rank()) && lhs != rhs;
+}
+
 BFSSpecRes V3Speculation::bfsSpeculate(AstNodeModule* modp, Speculateable s,
                                        bool speculatedBranch) {
 
@@ -423,10 +427,7 @@ BFSSpecRes V3Speculation::bfsSpeculate(AstNodeModule* modp, Speculateable s,
     // To ensure that t5 is not speculated into before all of its dependencies (t2,t3,t4) have been
     // speculated.
     // Also, compare on the pointers themselves to impose a strict weak ordering.
-    auto comp = [=](const auto& lhs, const auto& rhs) {
-        return (lhs->rank() <= rhs->rank()) && lhs != rhs;
-    };
-    std::set<ExecMTask*, decltype(comp)> bfsMTaskQueue(comp);
+    std::set<ExecMTask*, decltype(rankComparator)*> bfsMTaskQueue(rankComparator);
     bfsMTaskQueue.insert(s.cons);
     BFSSpecRes specres;
     specres.branch = speculatedBranch;
@@ -826,6 +827,58 @@ void V3Speculation::gatherConditionalSpecs(AstNodeModule* modp, Speculateables& 
     }
 }
 
+unsigned SpecOutcomeEst::estTaskCost() const {
+    unsigned acc = 0;
+    for (const auto& mtaskp : speculatedTasks) { acc += mtaskp->cost(); }
+
+    return acc;
+}
+unsigned SpecOutcomeEst::estResolveCost() const { return 0; }
+
+SpecOutcomeEst V3Speculation::estimateSpecOutcome(const Speculateable& s, ExecMTask* mtask) const {
+    SpecOutcomeEst est;
+    std::set<ExecMTask*, decltype(rankComparator)*> bfsMTaskQueue(rankComparator);
+    bfsMTaskQueue.insert(mtask);
+    while (!bfsMTaskQueue.empty()) {
+        ExecMTask* mtaskp = *bfsMTaskQueue.begin();
+        bfsMTaskQueue.erase(bfsMTaskQueue.begin());
+
+        // Do not speculate on tasks which have nonspeculative dependencies
+        auto toExecIns = m_dfgs.at(mtaskp)->ins();
+        bool nonSpecDep = false;
+        for (const auto& inVarp : toExecIns) {
+            const bool varProducedByMTask = m_varProducedBy.count(inVarp) != 0;
+
+            if (varProducedByMTask) {
+                ExecMTask* prodMTask = m_varProducedBy.at(inVarp);
+                const bool producerIsOrigSpec = prodMTask == s.prod;
+
+                if (!(producerIsOrigSpec || est.speculatedTasks.count(prodMTask) != 0)) {
+                    nonSpecDep = true;
+                    break;
+                }
+            }
+        }
+        if (nonSpecDep) { continue; }
+
+        // Task is speculateasble. Insert it, alongside its output variables, into the estimation.
+        est.speculatedTasks.insert(mtaskp);
+        auto toExecOuts = m_dfgs.at(mtaskp)->outs();
+        est.speculatedVars.insert(toExecOuts.begin(), toExecOuts.end());
+
+        // Enqueue children
+        for (V3GraphEdge* edgep = mtaskp->outBeginp(); edgep; edgep = edgep->outNextp()) {
+            ExecMTask* toExecMTaskp = dynamic_cast<ExecMTask*>(edgep->top());
+            if (bfsMTaskQueue.count(toExecMTaskp) > 0
+                || est.speculatedTasks.count(toExecMTaskp) > 0) {
+                continue;
+            }
+            bfsMTaskQueue.insert(toExecMTaskp);
+        }
+    }
+    return est;
+}
+
 void V3Speculation::speculateModule(AstNodeModule* modp) {
     V3Graph* mtasksp = v3Global.rootp()->execGraphp()->mutableDepGraphp();
     updateDataflowInfo(modp);
@@ -843,18 +896,17 @@ void V3Speculation::speculateModule(AstNodeModule* modp) {
         if (it.second.size() > 1) { it.second = {it.second.at(0)}; }
     }
 
-    // Filter speculateable consumers which are smaller than some fraction of an example cost
-    // of computational complexity
-    std::set<ExecMTask*> filterTooSmall;
-    constexpr double ratio = 2.5;
+    // Estimate whether an mtask (and its downstream mtasks) are worthwhile to execute.
+    std::set<ExecMTask*> notWorthIt;
     for (const auto& s : speculateable) {
-        if (s.first->cost() <= AstNode::instrCountCall() * ratio) {
-            filterTooSmall.insert(s.first);
-        }
+        auto est = estimateSpecOutcome(*s.second.begin(), s.first);
+        // This is just some arbitrary number for now hand tuned to some examples... Need a proper
+        // heuristic to determine e.g., resolution overhead
+        const unsigned limit = 250;
+        const unsigned estCost = est.estTaskCost() + est.estResolveCost();
+        if (estCost < limit) { notWorthIt.insert(s.first); }
     }
-    for (const auto& toFilter : filterTooSmall) { speculateable.erase(toFilter); }
-
-    // Narrow it down to a single case
+    for (const auto& toFilter : notWorthIt) { speculateable.erase(toFilter); }
 
     // Go speculate!
     for (const auto& s : speculateable) {
@@ -952,16 +1004,4 @@ void V3Speculation::updateDataflowInfo(AstNodeModule* modp) {
             m_varProducedBy[varp] = mtask;
         }
     }
-
-    /*
-    cout << "IO is:" << endl;
-    for (const auto& it : m_io.at(modp)) {
-        cout << it.first->name();
-        cout << "\t ins: ";
-        for (const auto& it2 : it.second.ins) { cout << it2->name(); }
-        cout << endl << "\t outs: ";
-        for (const auto& it2 : it.second.outs) { cout << it2->name(); }
-        cout << endl;
-    }
-    */
 }

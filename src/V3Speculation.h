@@ -49,6 +49,17 @@ struct CondSpeculateable {
     AstNode* condExpr = nullptr;
 };
 
+// struct containing information about the expected outcome of speculating a given MTask. Includes
+// the set of MTasks that will be speculated, as well as the variables that are going to be
+// comitted. This may then be used to determine whether speculation is worth the effort.
+struct SpecOutcomeEst {
+    std::set<ExecMTask*> speculatedTasks;
+    std::set<AstVar*> speculatedVars;
+
+    unsigned estTaskCost() const;
+    unsigned estResolveCost() const;
+};
+
 /**
  * @brief The Speculateable struct
  * Maintains the set of producer/consumer MTasks which share a boolean variable, wherein the
@@ -144,6 +155,7 @@ private:
     void gatherBoolVarSpecs(AstNodeModule* modp, Speculateables& speculateables);
     void gatherConditionalSpecs(AstNodeModule* modp, Speculateables& speculateables);
     bool isCriticalVariable(AstVar* varp, ExecMTask* consp);
+    SpecOutcomeEst estimateSpecOutcome(const Speculateable& s, ExecMTask* mtask) const;
 
     BFSSpecRes bfsSpeculateRec(AstNodeModule* modp, Speculateable s, ExecMTask* consumer,
                                VarReplMapping replacedVarMapping, bool speculatedBranch);
