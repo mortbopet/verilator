@@ -141,7 +141,6 @@ private:
     AstNode* genCommitSpecVarStmts(const VarReplMapping&);
     void updateDataflowInfo(AstNodeModule* modp);
     void speculateModule(AstNodeModule* nodep);
-    void doSpeculation(AstNodeModule* modp, Speculateable s);
     void gatherBoolVarSpecs(AstNodeModule* modp, Speculateables& speculateables);
     void gatherConditionalSpecs(AstNodeModule* modp, Speculateables& speculateables);
     bool isCriticalVariable(AstVar* varp, ExecMTask* consp);
