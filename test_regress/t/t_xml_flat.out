@@ -23,13 +23,13 @@
       <var fl="d15" loc="d,15,22,15,23" name="t.q" dtype_id="2" vartype="logic" origName="q"/>
       <var fl="d17" loc="d,17,22,17,29" name="t.between" dtype_id="2" vartype="logic" origName="between"/>
       <var fl="d32" loc="d,32,15,32,20" name="t.cell1.WIDTH" dtype_id="3" vartype="logic" origName="WIDTH" param="true">
-        <const fl="d19" loc="d,19,18,19,19" name="32&apos;sh4" dtype_id="3"/>
+        <const fl="d19" loc="d,19,18,19,19" name="32&apos;sh4" dtype_id="3" value="4"/>
       </var>
       <var fl="d34" loc="d,34,24,34,27" name="t.cell1.clk" dtype_id="1" vartype="logic" origName="clk"/>
       <var fl="d35" loc="d,35,30,35,31" name="t.cell1.d" dtype_id="2" vartype="logic" origName="d"/>
       <var fl="d36" loc="d,36,30,36,31" name="t.cell1.q" dtype_id="2" vartype="logic" origName="q"/>
       <var fl="d39" loc="d,39,15,39,22" name="t.cell1.IGNORED" dtype_id="3" vartype="logic" origName="IGNORED" localparam="true">
-        <const fl="d39" loc="d,39,25,39,26" name="32&apos;sh1" dtype_id="3"/>
+        <const fl="d39" loc="d,39,25,39,26" name="32&apos;sh1" dtype_id="3" value="1"/>
       </var>
       <var fl="d48" loc="d,48,10,48,13" name="t.cell2.clk" dtype_id="1" vartype="logic" origName="clk"/>
       <var fl="d49" loc="d,49,16,49,17" name="t.cell2.d" dtype_id="2" vartype="logic" origName="d"/>

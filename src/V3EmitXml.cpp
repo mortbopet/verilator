@@ -241,6 +241,16 @@ class EmitXmlFileVisitor final : public AstNVisitor {
         putsQuoted(cvtToStr(nodep->lhsp()->widthMinV()));
         outputChildrenEnd(nodep, "");
     }
+    virtual void visit(AstConst* nodep) override {
+        outputTag(nodep, "");
+        puts(" value=");
+        if (nodep->num().isDouble()) {
+            putsQuoted(cvtToStr(nodep->num().toDouble()));
+        } else {
+            putsQuoted(cvtToStr(nodep->num().toSInt()));
+        }
+        outputChildrenEnd(nodep, "");
+    }
 
     // Default
     virtual void visit(AstNode* nodep) override {
